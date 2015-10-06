@@ -1,6 +1,5 @@
 #include <iostream>
 #include <vector>
-#include <cstdint>
 #include <cstring>
 
 extern "C" {
@@ -9,10 +8,10 @@ extern "C" {
 }
 
 #include "fs.h"
+#include "fileop.h"
 
 using namespace std;
 
-enum FileOp { kFileOpCreate, kFileOpRemove, kFileOpRead, kFileOpWrite };
 const char *kGroup = "SLAVES";
 
 void HandleFileOpCreate(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, const size_t size);
@@ -32,10 +31,10 @@ void HandleFileOpCreate(mailbox &mbox, const char sender[MAX_GROUP_NAME], const 
   if (msg[0] != '"' || msg[size-1] != '"') goto fail;
   if (!CreateFile(string(msg, size))) goto fail;
 
-  SP_multicast(mbox, SAFE_MESS, sender, kFileOpCreate,	0, "");
+  SP_multicast(mbox, SAFE_MESS, sender, kFileCreateSuccess,	0, "");
 fail:
   const char *fail = "FAIL";
-  SP_multicast(mbox, SAFE_MESS, sender, kFileOpCreate,	strlen(fail), fail);
+  SP_multicast(mbox, SAFE_MESS, sender, kFileCreateFail,	strlen(fail), fail);
 }
 
 void HandleFileOpRemove(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size) {
@@ -43,10 +42,10 @@ void HandleFileOpRemove(mailbox &mbox, const char sender[MAX_GROUP_NAME], const 
   if (msg[0] != '"' || msg[size-1] != '"') goto fail;
   if (!RemoveFile(string(msg, size))) goto fail;
 
-  SP_multicast(mbox, SAFE_MESS, sender, kFileOpRemove,	0, "");
+  SP_multicast(mbox, SAFE_MESS, sender, kFileRemoveSuccess,	0, "");
 fail:
   const char *fail = "FAIL";
-  SP_multicast(mbox, SAFE_MESS, sender, kFileOpRemove,	strlen(fail), fail);
+  SP_multicast(mbox, SAFE_MESS, sender, kFileRemoveFail,	strlen(fail), fail);
 }
 
 void HandleFileOpRead(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size) {
@@ -55,14 +54,24 @@ void HandleFileOpRead(mailbox &mbox, const char sender[MAX_GROUP_NAME], const ch
   if (msg[0] != '"' || msg[size-1] != '"') goto fail;
   if (!ReadFile(string(msg, size), data)) goto fail;
 
-  SP_multicast(mbox, SAFE_MESS, sender, kFileOpRead,	data.size(), data.c_str());
+  SP_multicast(mbox, SAFE_MESS, sender, kFileReadSuccess,	data.size(), data.c_str());
 fail:
   const char *fail = "FAIL";
-  SP_multicast(mbox, SAFE_MESS, sender, kFileOpRead,	strlen(fail), fail);
+  SP_multicast(mbox, SAFE_MESS, sender, kFileReadFail,	strlen(fail), fail);
 }
 
 void HandleFileOpWrite(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size) {
+  if (size < 3) goto fail;
+  string data(msg, size);
+  size_t pos = data.find_first_of('"', 2);
+  if (msh[0] != '"' || string::npos == pos) goto fail;
 
+  if (!WriteFile(data.substr(1,pos-1), data.substr(pos+1))) goto fail;
+
+  SP_multicast(mbox, SAFE_MESS, sender, kFileWriteSuccess,	data.size(), data.c_str());
+fail:
+  const char *fail = "FAIL";
+  SP_multicast(mbox, SAFE_MESS, sender, kFileWriteFail,	strlen(fail), fail);
 }
 
 void SpreadRun() {
