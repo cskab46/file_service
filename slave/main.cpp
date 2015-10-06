@@ -1,69 +1,128 @@
 #include <iostream>
-#include <string>
-#include <fstream>
-#include <cstdio>
-#include <streambuf>
-#include <sys/stat.h>
+#include <vector>
+#include <cstdint>
+#include <cstring>
+
+extern "C" {
+  #include <sp.h>
+  #include <unistd.h>
+}
+
+#include "fs.h"
 
 using namespace std;
 
-bool Exists(const std::string &filename);
-bool CreateFile(const std::string &filename);
-bool RemoveFile(const std::string &filename);
-bool WriteFile(const std::string &filename, const std::string &data);
-bool ReadFile(const std::string &filename, std::string &data);
+enum FileOp { kFileOpCreate, kFileOpRemove, kFileOpRead, kFileOpWrite };
+const char *kGroup = "SLAVES";
 
+void HandleFileOpCreate(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, const size_t size);
+void HandleFileOpRemove(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size);
+void HandleFileOpRead(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size);
+void HandleFileOpWrite(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size);
+
+void SpreadRun();
 
 int main(int argc, char **argv) {
-
-  std::string data;
-  cout << Exists("teste.txt") << endl;
-  cout << RemoveFile("teste.txt") << endl;
-  cout << CreateFile("teste.txt") << endl;
-  cout << Exists("teste.txt") << endl;
-  cout << RemoveFile("teste.txt") << endl;
-  cout << WriteFile("teste.txt", "teste") << endl;
-
-  cout << ReadFile("teste.txt", data) << endl;
-  cout << data << endl;
-
-
-  cout << CreateFile("teste.txt") << endl;
-  cout << WriteFile("teste.txt", "teste") << endl;
-  cout << ReadFile("teste.txt", data) << endl;
-  cout << data << endl;
+  SpreadRun();
   return 0;
 }
 
-bool Exists(const std::string &filename) {
-  struct stat buffer;
-  return 0 == stat(filename.c_str(), &buffer);
+void HandleFileOpCreate(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, const size_t size) {
+  if (!size) goto fail;
+  if (msg[0] != '"' || msg[size-1] != '"') goto fail;
+  if (!CreateFile(string(msg, size))) goto fail;
+
+  SP_multicast(mbox, SAFE_MESS, sender, kFileOpCreate,	0, "");
+fail:
+  const char *fail = "FAIL";
+  SP_multicast(mbox, SAFE_MESS, sender, kFileOpCreate,	strlen(fail), fail);
 }
 
-bool CreateFile(const std::string &filename) {
-  if (Exists(filename)) return false;
-  std::ofstream out(filename, std::ios::out | std::ios::binary);
-  return true;
+void HandleFileOpRemove(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size) {
+  if (!size) goto fail;
+  if (msg[0] != '"' || msg[size-1] != '"') goto fail;
+  if (!RemoveFile(string(msg, size))) goto fail;
+
+  SP_multicast(mbox, SAFE_MESS, sender, kFileOpRemove,	0, "");
+fail:
+  const char *fail = "FAIL";
+  SP_multicast(mbox, SAFE_MESS, sender, kFileOpRemove,	strlen(fail), fail);
 }
 
-bool RemoveFile(const std::string &filename) {
-  if (!Exists(filename)) return false;
-  return 0 == remove(filename.c_str());
+void HandleFileOpRead(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size) {
+  string data;
+  if (!size) goto fail;
+  if (msg[0] != '"' || msg[size-1] != '"') goto fail;
+  if (!ReadFile(string(msg, size), data)) goto fail;
+
+  SP_multicast(mbox, SAFE_MESS, sender, kFileOpRead,	data.size(), data.c_str());
+fail:
+  const char *fail = "FAIL";
+  SP_multicast(mbox, SAFE_MESS, sender, kFileOpRead,	strlen(fail), fail);
 }
 
-bool WriteFile(const std::string &filename, const std::string &data) {
-  if (!Exists(filename)) return false;
-  std::ofstream out(filename, std::ios::out | std::ios::binary);
-  if (!out.good()) return false;
-  out << data;
-  return true;
+void HandleFileOpWrite(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size) {
+
 }
 
-bool ReadFile(const std::string &filename, std::string &data) {
-  if (!Exists(filename)) return false;
-  std::ifstream input(filename, std::ios::binary);
-  if (!input.good()) return false;
-  data = std::string((std::istreambuf_iterator<char>(input)),
-                     std::istreambuf_iterator<char>());
-  return true;
+void SpreadRun() {
+  sp_time timeout{5, 0};
+  mailbox mbox;
+  char group[MAX_PRIVATE_NAME];
+  auto ret = SP_connect_timeout("", NULL, 0, 1, &mbox, group, timeout);
+  if (ACCEPT_SESSION != ret) {
+    cout << "Connection Failure: " << ret << endl;
+    return;
+  }
+
+  if (SP_join(mbox, kGroup)) {
+    cout << "Failed to join " << kGroup << endl;
+    return;
+  }
+
+  char sender[MAX_GROUP_NAME];
+  char groups[32][MAX_GROUP_NAME];
+  int num_groups;
+  short msg_type;
+  vector<char> msg;
+  int endian;
+
+  while (true) {
+    int sv_type = 0;
+    int ret = SP_receive(mbox, &sv_type, sender, 32, &num_groups,
+                         groups, &msg_type, &endian, msg.size(), msg.data());
+    if (BUFFER_TOO_SHORT == ret) {
+      msg.reserve(endian);
+      continue;
+    }
+
+    if (ret < 0) {
+      cout << "SP_receive error: " << ret << endl;
+      sleep(1);
+      continue;
+    }
+    if (Is_reg_memb_mess(sv_type)) {
+      continue;
+    }
+
+    switch(msg_type) {
+    case kFileOpCreate:
+      HandleFileOpCreate(mbox, sender, msg.data(), ret);
+      break;
+    case kFileOpRemove:
+      HandleFileOpRemove(mbox, sender, msg.data(), ret);
+      break;
+    case kFileOpRead:
+      HandleFileOpRead(mbox, sender, msg.data(), ret);
+      break;
+    case kFileOpWrite:
+      HandleFileOpWrite(mbox, sender, msg.data(), ret);
+      break;
+    default:
+      cout << "Spurious message received." << endl;
+      break;
+    }
+  }
+  SP_leave(mbox, kGroup);
+  SP_disconnect(mbox);
 }
