@@ -1,7 +1,7 @@
 #include <cstdint>
 
 enum : uint16_t {
-  kFileCreate,
+  kFileCreate = 2,
   kFileRemove,
   kFileRead,
   kFileWrite,
