@@ -5,6 +5,8 @@
 #include <cstring>
 #include <sstream>
 #include <algorithm>
+#include <chrono>
+#include <thread>
 extern "C" {
   #include <sp.h>
   #include <unistd.h>
@@ -13,72 +15,46 @@ extern "C" {
 #include "../slave/fileop.h"
 
 using namespace std;
+using namespace std::chrono;
 
-const string kNamePrefix = "SERVER_";
 const char* kGroup = "SERVER_GROUP";
-const short kInfoMessageType = 0xDEAD;
-const short kVoteMessageType = 0xCAFE;
-const short kLeadMessageType = 0xBEEF;
-const char kExitChar = 'q';
 
-struct Server {
-  string name;
-  unsigned int id;
-  unsigned int priority;
+// Bully
+int gId;
+const double kTimeout = 1000;// timeout in seconds for the bully election to take place
+const double kCheckLeaderTimeout = 5000;
+const short kElectionMessage = 0xDEAD;
+const short kAnswerMessage = 0xCAFE;
+const short kCoordinatorMessage = 0xBEEF;
+
+const short kJoinMessage = 0xABBA;
+const short kGreetMessage = 0xBAAB;
+
+const short kPingMessage = 0x0474;
+const short kPongMessage = 0x4740;
+
+const short kNoMessage = 0xFFFF;
+
+struct Message {
+  int16_t type;
+  string sender;
+  vector<char> data;
 };
-unsigned int gId;
-unsigned int gPriority;
-bool gLeave = false;
 
-void PrintMember(const Server &member) {
-    cout << "(" << kNamePrefix << member.id <<
-            "; PRIORITY: " << member.priority << ")" << endl;
+
+void PrintMember(const string &member) {
+  cout << "ID " << member << endl;
 }
 
-void PrintMembers(const vector<Server> &members) {
+void PrintMembers(const vector<string> &members) {
   for (auto &member : members){
     PrintMember(member);
   };
 }
 
-Server ChooseLeader(const vector<Server> &members) {
-  auto great = [](const Server &s1, const Server &s2) {
-    return s1.priority < s2.priority;
-  };
-  auto leader = max_element(begin(members), end(members), great);
-  return leader == end(members) ? Server{"",0,0} : *leader;
-}
-
-string InfoMessage() {
-  stringstream tmp;
-  tmp << gId << "-" << gPriority;
-  return tmp.str();
-}
-
-string CandidateMessage(const Server &leader) {
-  stringstream tmp;
-  tmp << leader.name << "-" << leader.id << "-" << leader.priority;
-  return tmp.str();
-}
-
-bool IdFromInfoMessage(const string &msg, unsigned int &id) {
-  istringstream id_parse(msg);
-  id_parse >> id;
-  return !id_parse.fail();
-}
-
-bool PriorityFromInfoMessage(const string &msg, unsigned int &data) {
-  istringstream id_parse(msg);
-  int priority_pos = msg.find("-");
-  if (priority_pos == string::npos) return false;
-  id_parse.ignore(priority_pos+1);
-  id_parse >> data;
-  return !id_parse.fail();
-}
-
 bool ParseArgs(int argc, char **argv) {
-  if (argc != 3) {
-    cout << "Usage: process_group <ID> <PRIORITY>" << endl;
+  if (argc != 2) {
+    cout << "Usage: server <ID>" << endl;
     return false;
   }
   istringstream parse_id(argv[1]);
@@ -87,91 +63,124 @@ bool ParseArgs(int argc, char **argv) {
     cout << "<ID>: unsigned int in range[0-1000]" << endl;
     return false;
   }
-  istringstream parse_priority(argv[2]);
-  parse_priority >> gPriority;
-  if (parse_id.fail() || gPriority > 100) {
-    cout << "<PRIORITY>: unsigned int in range[0-100]" << endl;
-    return false;
-  }
   return true;
+}
+
+Message GetMessage(mailbox &mbox);
+
+Message GetMessage(mailbox &mbox) {
+  char sender[MAX_GROUP_NAME];
+  char groups[32][MAX_GROUP_NAME];
+  int num_groups, endian;
+  int sv_type = 0, ret;
+  Message response;
+retry:
+  ret = SP_receive(mbox, &sv_type, sender, 32, &num_groups,
+                   groups, &response.type, &endian,
+                   response.data.size(), response.data.data());
+  response.sender = sender;
+  if (BUFFER_TOO_SHORT == ret) {
+    response.data.resize(-endian);
+    goto retry;
+  } else if (ret < 0) {
+    response.type = kNoMessage;
+  }
+  cout << "Sender: " << response.sender << endl;
+  return response;
 }
 
 void SpreadRun() {
   sp_time timeout{5, 0};
   mailbox mbox;
   char group[MAX_PRIVATE_NAME];
-
-  stringstream name(kNamePrefix);
-  name << gId;
-  auto ret = SP_connect_timeout("", name.str().c_str(), 0, 1, &mbox, group, timeout);
+  auto ret = SP_connect_timeout("", to_string(gId).c_str(), 0, 0, &mbox, group, timeout);
   if (ACCEPT_SESSION != ret) {
     cout << "Connection Failure: " << ret << endl;
     return;
   }
-
+  string me = group; // this process private group
+  cout << "Me: " << me << endl;
   if (SP_join(mbox, kGroup)) {
     cout << "Failed to join " << kGroup << endl;
     return;
   }
+  SP_multicast(mbox, SAFE_MESS, kGroup, kJoinMessage, 0, "");
 
-  char sender[MAX_GROUP_NAME];
-  char groups[32][MAX_GROUP_NAME];
-  int num_groups;
-  short msg_type;
-  char msg[256];
-  int endian;
-
-  Server leader;
-  vector<Server> members;
-  int pending_infos = 0;
-  map<string, int> election_box; // vote -> vote count
-
-  string info = InfoMessage();
-  while (!gLeave) {
-    int sv_type = 0;
-    fill(msg, msg+256, 0);
-    int err = SP_receive(mbox, &sv_type, sender, 32, &num_groups,
-                         groups, &msg_type, &endian, 256, msg);
-    if (err < 0) {
-      cout << "SP_receive error: " << err << endl;
-      sleep(1);
-      continue;
-    }
-    if (Is_reg_memb_mess(sv_type)) {
-      pending_infos = num_groups;
-      members.clear();
-      SP_multicast(mbox, SAFE_MESS, kGroup, kInfoMessageType,
-                   info.length(), info.c_str());
-      continue;
-    }
-
-    switch(msg_type) {
-    case kInfoMessageType:
-      unsigned int id, priority;
-      if (!IdFromInfoMessage(msg, id) ||
-          !PriorityFromInfoMessage(msg, priority)) {
-        cout << "Invalid info message format." << msg << endl;
-        continue;
+  string leader = me;
+  vector<string> others;
+  bool election = false;
+  auto election_start = steady_clock::now();
+  auto last_check_leader = steady_clock::now();
+  bool checking_leader = false;
+  auto start_election = false;
+  while (true) {
+    if (duration_cast<milliseconds>(steady_clock::now()-last_check_leader).count() > kCheckLeaderTimeout) {
+      last_check_leader = steady_clock::now();
+      if (me == leader) continue;
+      if (checking_leader) {
+        cout << "Leader Died" << endl;
+        start_election = true; // leader died
+        checking_leader = false;
+      } else {
+        cout << "Checking Leader: " << SP_multicast(mbox, SAFE_MESS, leader.c_str(), kPingMessage, 0, "") << endl;
+        checking_leader = true;
       }
-      members.push_back(Server{sender, id, priority});
-      if (--pending_infos) continue;
+    }
+    if (election && duration_cast<milliseconds>(steady_clock::now()-election_start).count() > kTimeout) {
+      SP_multicast(mbox, SAFE_MESS, kGroup, kCoordinatorMessage, 0, "");
+      leader = me;
+      election = false;
+    }
+    if (!election && start_election) {
+      start_election = false;
+      for(auto &m: others) {
+        try {
+          if (stoi(me.substr(1)) < stoi(m.substr(1))) // Ignoring the # char
+            SP_multicast(mbox, SAFE_MESS, m.c_str(), kElectionMessage, 0, "");
+        } catch(...) {}
+      }
+      election_start = steady_clock::now();
+      election = true;
+    }
+    if (SP_poll(mbox) <= 0) continue;
+    auto msg = GetMessage(mbox);
+    if (msg.sender == me) continue;
+    switch(msg.type) {
+    case kJoinMessage:
+      others.push_back(msg.sender);
+      SP_multicast(mbox, SAFE_MESS, msg.sender.c_str(), kGreetMessage, 0, "");
+      start_election = true;
       break;
-    case kVoteMessageType:
-      election_box[msg]++;
+    case kGreetMessage:
+      others.push_back(msg.sender);
       break;
-    case kLeadMessageType:
-      continue;
+    case kElectionMessage:
+      SP_multicast(mbox, SAFE_MESS, msg.sender.c_str(), kAnswerMessage, 0, "");
+      start_election = true;
+      break;
+    case kAnswerMessage:
+      election = false;
+      this_thread::sleep_for(seconds(1));
+      break;
+    case kCoordinatorMessage:
+      leader = msg.sender;
+      cout << "New Coordinator: " << leader << endl;
+      break;
+    case kPingMessage:
+      cout << "Received Ping." << endl;
+      SP_multicast(mbox, SAFE_MESS, msg.sender.c_str(), kPongMessage, 0, "");
+      break;
+    case kPongMessage:
+      cout << "Leader Alive." << endl;
+      checking_leader = false;
+      break;
     default:
       cout << "Spurious message received." << endl;
       continue;
     }
 
-    PrintMembers(members);
-    leader = ChooseLeader(members);
-    cout << "LEADER: "; PrintMember(leader);
-    auto lead_msg = CandidateMessage(leader);
-    SP_multicast(mbox, SAFE_MESS, kGroup, kLeadMessageType,
-                 lead_msg.length(), lead_msg.c_str());
+    PrintMembers(others);
+    cout << "LEADER: " << leader << endl;
   }
   SP_leave(mbox, kGroup);
   SP_disconnect(mbox);
