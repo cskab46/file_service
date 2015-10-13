@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <list>
 #include <map>
 #include <string>
 #include <cstring>
@@ -7,6 +8,8 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <mutex>
+#include <atomic>
 extern "C" {
   #include <sp.h>
   #include <unistd.h>
@@ -17,40 +20,29 @@ extern "C" {
 using namespace std;
 using namespace std::chrono;
 
-const char* kGroup = "SERVER_GROUP";
+const char* kProxyGroup = "SERVERS";
+const char* kLeadershipGroup = "LEADERSHIP";
+const char* kSlavesGroup = "SLAVES";
 
 // Bully
 int gId;
 const double kTimeout = 1000;// timeout in seconds for the bully election to take place
-const double kCheckLeaderTimeout = 5000;
 const short kElectionMessage = 0xDEAD;
 const short kAnswerMessage = 0xCAFE;
 const short kCoordinatorMessage = 0xBEEF;
 
-const short kJoinMessage = 0xABBA;
-const short kGreetMessage = 0xBAAB;
+const short kLogMessage = 0xD1CA;
 
-const short kPingMessage = 0x0474;
-const short kPongMessage = 0x4740;
-
+const short kSlaveMessage = 0x51A7;
 const short kNoMessage = 0xFFFF;
 
 struct Message {
+  int service;
   int16_t type;
   string sender;
   vector<char> data;
+  vector<string> group;
 };
-
-
-void PrintMember(const string &member) {
-  cout << "ID " << member << endl;
-}
-
-void PrintMembers(const vector<string> &members) {
-  for (auto &member : members){
-    PrintMember(member);
-  };
-}
 
 bool ParseArgs(int argc, char **argv) {
   if (argc != 2) {
@@ -71,118 +63,286 @@ Message GetMessage(mailbox &mbox);
 Message GetMessage(mailbox &mbox) {
   char sender[MAX_GROUP_NAME];
   char groups[32][MAX_GROUP_NAME];
-  int num_groups, endian;
-  int sv_type = 0, ret;
-  Message response;
+  int num_groups, endian, sv_type = 0, ret;
+  Message response; response.data.resize(0);
 retry:
   ret = SP_receive(mbox, &sv_type, sender, 32, &num_groups,
                    groups, &response.type, &endian,
                    response.data.size(), response.data.data());
   response.sender = sender;
+  response.service = sv_type;
   if (BUFFER_TOO_SHORT == ret) {
     response.data.resize(-endian);
     goto retry;
   } else if (ret < 0) {
     response.type = kNoMessage;
   }
-  cout << "Sender: " << response.sender << endl;
+  for (int i = 0; i < num_groups; i++) response.group.push_back(groups[i]);
   return response;
 }
 
-void SpreadRun() {
+// Returns true if m1 has high priority than m2
+bool HasHighPriority(const string &m1, const string &m2) {
+  return stoi(m1.substr(1)) < stoi(m2.substr(1)); // Ignoring the # char
+}
+void ElectLeader(vector<string> candidates, string me, atomic<bool> &finished) {
+  mailbox mbox;
+  char group[MAX_PRIVATE_NAME];
+  auto ret = SP_connect_timeout("", NULL, 0, 0, &mbox, group, sp_time{5,0});
+  if (ACCEPT_SESSION != ret) return;
+  for(auto &m: candidates) {
+     SP_multicast(mbox, SAFE_MESS, m.c_str(), kElectionMessage, 0, "");
+  }
+  bool won = true;
+  auto start = steady_clock::now();
+  while(duration_cast<milliseconds>(steady_clock::now() - start).count() < kTimeout) {
+    if (SP_poll(mbox) > 0) {
+      auto msg = GetMessage(mbox);
+      if (find(begin(candidates), end(candidates), msg.sender) != end(candidates) && msg.type == kAnswerMessage) {
+        won = false;
+        break;
+      }
+    }
+  }
+  if (won) SP_multicast(mbox, SAFE_MESS, kLeadershipGroup, kCoordinatorMessage, me.size(), me.c_str());
+  SP_disconnect(mbox);
+  finished = true;
+}
+
+void Leadership(atomic<bool> &lead) {
   sp_time timeout{5, 0};
   mailbox mbox;
   char group[MAX_PRIVATE_NAME];
-  auto ret = SP_connect_timeout("", to_string(gId).c_str(), 0, 0, &mbox, group, timeout);
+  auto ret = SP_connect_timeout("", to_string(gId).c_str(), 0, 1, &mbox, group, timeout);
   if (ACCEPT_SESSION != ret) {
     cout << "Connection Failure: " << ret << endl;
     return;
   }
   string me = group; // this process private group
   cout << "Me: " << me << endl;
-  if (SP_join(mbox, kGroup)) {
-    cout << "Failed to join " << kGroup << endl;
+  if (SP_join(mbox, kLeadershipGroup)) {
+    cout << "Failed to join " << kLeadershipGroup << endl;
     return;
   }
-  SP_multicast(mbox, SAFE_MESS, kGroup, kJoinMessage, 0, "");
-
-  string leader = me;
-  vector<string> others;
-  bool election = false;
-  auto election_start = steady_clock::now();
-  auto last_check_leader = steady_clock::now();
-  bool checking_leader = false;
+  vector<string> candidates;
   auto start_election = false;
+  std::atomic<bool> election_finished(true);
   while (true) {
-    if (duration_cast<milliseconds>(steady_clock::now()-last_check_leader).count() > kCheckLeaderTimeout) {
-      last_check_leader = steady_clock::now();
-      if (me == leader) continue;
-      if (checking_leader) {
-        cout << "Leader Died" << endl;
-        start_election = true; // leader died
-        checking_leader = false;
-      } else {
-        cout << "Checking Leader: " << SP_multicast(mbox, SAFE_MESS, leader.c_str(), kPingMessage, 0, "") << endl;
-        checking_leader = true;
-      }
-    }
-    if (election && duration_cast<milliseconds>(steady_clock::now()-election_start).count() > kTimeout) {
-      SP_multicast(mbox, SAFE_MESS, kGroup, kCoordinatorMessage, 0, "");
-      leader = me;
-      election = false;
-    }
-    if (!election && start_election) {
+    if (election_finished && start_election) {
+      election_finished = false;
       start_election = false;
-      for(auto &m: others) {
-        try {
-          if (stoi(me.substr(1)) < stoi(m.substr(1))) // Ignoring the # char
-            SP_multicast(mbox, SAFE_MESS, m.c_str(), kElectionMessage, 0, "");
-        } catch(...) {}
-      }
-      election_start = steady_clock::now();
-      election = true;
+      thread t(ElectLeader, candidates, me, ref(election_finished));
+      t.detach();
     }
+
     if (SP_poll(mbox) <= 0) continue;
     auto msg = GetMessage(mbox);
-    if (msg.sender == me) continue;
-    switch(msg.type) {
-    case kJoinMessage:
-      others.push_back(msg.sender);
-      SP_multicast(mbox, SAFE_MESS, msg.sender.c_str(), kGreetMessage, 0, "");
+    if (Is_reg_memb_mess(msg.service)) {
+      candidates.clear();
+      for (auto &m : msg.group) if (HasHighPriority(me, m)) candidates.push_back(m);
       start_election = true;
-      break;
-    case kGreetMessage:
-      others.push_back(msg.sender);
-      break;
+      continue;
+    }
+    switch(msg.type) {
+    // Bully Messages
     case kElectionMessage:
       SP_multicast(mbox, SAFE_MESS, msg.sender.c_str(), kAnswerMessage, 0, "");
-      start_election = true;
+      start_election = election_finished;
       break;
     case kAnswerMessage:
-      election = false;
-      this_thread::sleep_for(seconds(1));
+      candidates.push_back(msg.sender);
       break;
     case kCoordinatorMessage:
-      leader = msg.sender;
-      cout << "New Coordinator: " << leader << endl;
-      break;
-    case kPingMessage:
-      cout << "Received Ping." << endl;
-      SP_multicast(mbox, SAFE_MESS, msg.sender.c_str(), kPongMessage, 0, "");
-      break;
-    case kPongMessage:
-      cout << "Leader Alive." << endl;
-      checking_leader = false;
+      lead = (string(msg.data.data(), msg.data.size())== me);
+      cout << "New Coordinator: " << string(msg.data.data(), msg.data.size()) << endl;
       break;
     default:
       cout << "Spurious message received." << endl;
       continue;
     }
-
-    PrintMembers(others);
-    cout << "LEADER: " << leader << endl;
   }
-  SP_leave(mbox, kGroup);
+  SP_leave(mbox, kLeadershipGroup);
+  SP_disconnect(mbox);
+}
+
+mutex slaves_mutex;
+vector<string> slaves;
+
+mutex locks_mutex;
+// file -> (slave, owner)
+map<string,pair<string,string>> locks;
+
+void HandleOperation(const Message &request) {
+  mailbox mbox;
+  char group[MAX_PRIVATE_NAME];
+  auto ret = SP_connect_timeout("", NULL, 0, 0, &mbox, group, sp_time{5,0});
+  if (ACCEPT_SESSION != ret) return;
+  auto file = string(begin(request.data), end(request.data));
+  locks_mutex.lock();
+  auto has_entry = locks.count(file);
+  locks_mutex.unlock();
+  string slave;
+  switch(request.type) {
+  case kFileCreate:
+    if (has_entry || slaves.empty()) {
+      SP_multicast(mbox, SAFE_MESS, request.sender.c_str(), kFileCreateFail, request.data.size(), request.data.data());
+      return;
+    }
+    slaves_mutex.lock();
+    slave = slaves[rand()%slaves.size()];
+    slaves_mutex.unlock();
+    locks_mutex.lock();
+    locks[file].first = slave;
+    locks_mutex.unlock();
+    break;
+  case kFileRemove:
+    if (!has_entry || slaves.empty()) {
+      SP_multicast(mbox, SAFE_MESS, request.sender.c_str(), kFileRemoveFail, request.data.size(), request.data.data());
+      return;
+    }
+    break;
+  case kFileRead:
+    if (!has_entry || slaves.empty()) {
+      SP_multicast(mbox, SAFE_MESS, request.sender.c_str(), kFileReadFail, request.data.size(), request.data.data());
+      return;
+    }
+    break;
+  case kFileWrite:
+    if (!has_entry || slaves.empty()) {
+      SP_multicast(mbox, SAFE_MESS, request.sender.c_str(), kFileWriteFail, request.data.size(), request.data.data());
+      return;
+    }
+    break;
+  default:
+    cout << "Spurious message." << endl;
+    return;
+  }
+
+  bool own = false;
+  while (!own) {
+    locks_mutex.lock();
+    slave = locks[file].first;
+    if(locks[file].second.empty()) {
+      own = true;
+      locks[file].second = request.sender;
+      locks_mutex.unlock();
+      auto msg = to_string(file.size()) + "#" + file +
+          to_string(slave.size()) + "#" + slave +
+          to_string(request.sender.size()) + "#" + request.sender;
+      SP_multicast(mbox, SAFE_MESS, kProxyGroup, kLogMessage, msg.size(), msg.data());
+    } else this_thread::sleep_for(milliseconds(500));
+  }
+
+
+  if (SP_multicast(mbox, SAFE_MESS, request.sender.c_str(), request.type, slave.size(), slave.c_str()) > 0) {
+    while(true) {
+      if (SP_poll(mbox) > 0) {
+        auto msg = GetMessage(mbox);
+        auto response_file = string(begin(msg.data), end(msg.data));
+        if (msg.sender == request.sender && file == response_file) break;
+      }
+    }
+  }
+
+  locks_mutex.lock();
+  locks[file].second.clear();
+  auto msg = to_string(file.size()) + "#" + file +
+      to_string(slave.size()) + "#" + slave +
+      "0#";
+  SP_multicast(mbox, SAFE_MESS, kProxyGroup, kLogMessage, msg.size(), msg.data());
+  locks_mutex.unlock();
+
+  SP_disconnect(mbox);
+}
+
+void HandleLog(const Message &log) {
+  auto msg = string(begin(log.data), end(log.data));
+  auto first_m = msg.find_first_of('#');
+  auto second_m = msg.find_first_of('#', first_m + 1);
+  auto third_m = msg.find_first_of('#', second_m + 1);
+
+  auto file_size = stoi(msg);
+  auto file = msg.substr(first_m + 1, file_size);
+  auto slave_size = stoi(msg.substr(first_m+1+file_size));
+  auto slave = msg.substr(second_m + 1, slave_size);
+  auto owner_size = stoi(msg.substr(second_m+1+slave_size));
+  auto owner = msg.substr(third_m + 1, owner_size);
+
+  locks_mutex.lock();
+  locks[file].first = slave;
+  locks[file].second = owner;
+  locks_mutex.unlock();
+}
+
+void Slaves() {
+  sp_time timeout{5, 0};
+  mailbox mbox;
+  char group[MAX_PRIVATE_NAME];
+  auto ret = SP_connect_timeout("", NULL, 0, 1, &mbox, group, timeout);
+  if (ACCEPT_SESSION != ret) {
+    cout << "Connection Failure: " << ret << endl;
+    return;
+  }
+  if (SP_join(mbox, kSlavesGroup)) {
+    cout << "Failed to join " << kSlavesGroup << endl;
+    return;
+  }
+  while (true) {
+    if (SP_poll(mbox) <= 0) {
+      this_thread::sleep_for(milliseconds(100));
+      continue;
+    }
+    auto msg = GetMessage(mbox);
+    if (msg.type == kSlaveMessage) {
+      slaves_mutex.lock();
+      slaves.push_back(string(begin(msg.data), end(msg.data)));
+      slaves_mutex.unlock();
+      continue;
+    } else if (!Is_reg_memb_mess(msg.service)) {
+      continue;
+    }
+    vector<string> down;
+    slaves_mutex.lock();
+    for (auto &m : slaves) if (find(begin(msg.group), end(msg.group), m) == end(msg.group)) down.push_back(m);
+    for (auto &d: down) slaves.erase(remove(begin(slaves), end(slaves), d), end(slaves));
+    slaves_mutex.unlock();
+
+    vector<string> del;
+    locks_mutex.lock();
+    for (auto &d : down) for (auto &f : locks) if (f.second.first == d) del.push_back(f.first);
+    for (auto &f: del) locks.erase(f);
+    locks_mutex.unlock();
+  }
+  SP_leave(mbox, kSlavesGroup);
+  SP_disconnect(mbox);
+}
+
+void Proxy(atomic<bool> &lead) {
+  sp_time timeout{5, 0};
+  mailbox mbox;
+  char group[MAX_PRIVATE_NAME];
+  auto ret = SP_connect_timeout("", NULL, 0, 0, &mbox, group, timeout);
+  if (ACCEPT_SESSION != ret) {
+    cout << "Connection Failure: " << ret << endl;
+    return;
+  }
+  if (SP_join(mbox, kProxyGroup)) {
+    cout << "Failed to join " << kProxyGroup << endl;
+    return;
+  }
+  while (true) {
+    if (SP_poll(mbox) <= 0) continue;
+    auto msg = GetMessage(mbox);
+    if (msg.type == kLogMessage && !lead) {
+      HandleLog(msg);
+    } else if (lead) {
+      thread t(HandleOperation, ref(msg));
+      t.detach();
+    } else {
+      //...
+    }
+  }
+  SP_leave(mbox, kProxyGroup);
   SP_disconnect(mbox);
 }
 
@@ -190,7 +350,13 @@ int main(int argc, char **argv) {
   if (!ParseArgs(argc, argv)) {
     return 1;
   }
-  SpreadRun();
+  atomic<bool> lead(false);
+  thread leadership(Leadership, ref(lead));
+  thread slaves(Slaves);
+  thread proxy(Proxy, ref(lead));
 
+  leadership.join();
+  slaves.join();
+  proxy.join();
   return 0;
 }

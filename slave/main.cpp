@@ -76,7 +76,7 @@ fail:
   const char *fail = "FAIL";
   SP_multicast(mbox, SAFE_MESS, sender, kFileWriteFail,	strlen(fail), fail);
 }
-
+const short kSlaveMessage = 0x51A7;
 void SpreadRun() {
   sp_time timeout{5, 0};
   mailbox mbox;
@@ -92,6 +92,7 @@ void SpreadRun() {
     cout << "Failed to join " << kGroup << endl;
     return;
   }
+  SP_multicast(mbox, SAFE_MESS, kGroup, kSlaveMessage, strlen(group), group);
 
   char sender[MAX_GROUP_NAME];
   char groups[32][MAX_GROUP_NAME];

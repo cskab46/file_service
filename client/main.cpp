@@ -13,11 +13,12 @@ extern "C" {
 using namespace std;
 
 const char *kGroup = "CLIENTS";
+const char *kServerGroup = "SERVERS";
 
-void RequestCreate(mailbox &mbox, const char sender[MAX_GROUP_NAME]);
-void RequestRemove(mailbox &mbox, const char sender[MAX_GROUP_NAME]);
-void RequestRead(mailbox &mbox, const char sender[MAX_GROUP_NAME]);
-void RequestWrite(mailbox &mbox, const char sender[MAX_GROUP_NAME]);
+void RequestCreate(mailbox &mbox, string sender, string filename);
+void RequestRemove(mailbox &mbox, string sender, string filename);
+void RequestRead(mailbox &mbox, string sender, string filename);
+void RequestWrite(mailbox &mbox, string sender, string filename);
 
 void SpreadRun();
 
@@ -47,13 +48,10 @@ retry:
   return msg_type;
 }
 
-void RequestCreate(mailbox &mbox, const char sender[MAX_GROUP_NAME]) {
-  static std::string filename;
-  cout << "Please provide a file name: ";
-  cin >> filename;
+void RequestCreate(mailbox &mbox, string sender, string filename) {
   string create_msg("\"");
   create_msg.append(filename).append("\"");
-  auto ret = SP_multicast(mbox, SAFE_MESS, sender, kFileCreate,	create_msg.size(), create_msg.c_str());
+  auto ret = SP_multicast(mbox, SAFE_MESS, sender.c_str(), kFileCreate,	create_msg.size(), create_msg.c_str());
   if (ret < 0) {
     cout << "Failed sending the request." << endl;
     return;
@@ -69,13 +67,10 @@ void RequestCreate(mailbox &mbox, const char sender[MAX_GROUP_NAME]) {
   cout << "File created successfully." << endl;
 }
 
-void RequestRemove(mailbox &mbox, const char sender[MAX_GROUP_NAME]) {
-  static std::string filename;
-  cout << "Please provide a file name: ";
-  cin >> filename;
+void RequestRemove(mailbox &mbox, string sender, string filename) {
   string remove_msg("\"");
   remove_msg.append(filename).append("\"");
-  auto ret = SP_multicast(mbox, SAFE_MESS, sender, kFileRemove,	remove_msg.size(), remove_msg.c_str());
+  auto ret = SP_multicast(mbox, SAFE_MESS, sender.c_str(), kFileRemove,	remove_msg.size(), remove_msg.c_str());
   if (ret < 0) {
     cout << "Failed sending the request." << endl;
     return;
@@ -91,13 +86,10 @@ void RequestRemove(mailbox &mbox, const char sender[MAX_GROUP_NAME]) {
   cout << "File removed successfully." << endl;
  }
 
-void RequestRead(mailbox &mbox, const char sender[MAX_GROUP_NAME]) {
-  static std::string filename;
-  cout << "Please provide a file name: ";
-  cin >> filename;
+void RequestRead(mailbox &mbox, string sender, string filename) {
   string read_msg("\"");
   read_msg.append(filename).append("\"");
-  auto ret = SP_multicast(mbox, SAFE_MESS, sender, kFileRead,	read_msg.size(), read_msg.c_str());
+  auto ret = SP_multicast(mbox, SAFE_MESS, sender.c_str(), kFileRead,	read_msg.size(), read_msg.c_str());
   if (ret < 0) {
     cout << "Failed sending the request." << endl;
     return;
@@ -114,16 +106,13 @@ void RequestRead(mailbox &mbox, const char sender[MAX_GROUP_NAME]) {
   cout << string(data.data(), data.size()) << endl;
  }
 
-void RequestWrite(mailbox &mbox, const char sender[MAX_GROUP_NAME]) {
-  static std::string filename;
-  cout << "Please provide a file name: ";
-  cin >> filename;
+void RequestWrite(mailbox &mbox, string sender, string filename) {
   string write_msg("\"");
   write_msg = write_msg + filename + "\"";
   cout << "Please provide the content to be written: ";
   cin >> filename;
   write_msg.append(filename);
-  auto ret = SP_multicast(mbox, SAFE_MESS, sender, kFileWrite,	write_msg.size(), write_msg.c_str());
+  auto ret = SP_multicast(mbox, SAFE_MESS, sender.c_str(), kFileWrite,	write_msg.size(), write_msg.c_str());
   if (ret < 0) {
     cout << "Failed sending the request." << endl;
     return;
@@ -138,6 +127,34 @@ void RequestWrite(mailbox &mbox, const char sender[MAX_GROUP_NAME]) {
   }
   cout << "File written successfully." << endl;
  }
+string AskPermission(mailbox &mbox, int op, string file , string &responder) {
+  auto ret = SP_multicast(mbox, SAFE_MESS, kServerGroup,
+                          op,	file.size(), file.c_str());
+  if (ret < 0) {
+    cout << "Failed sending the request." << endl;
+    return "";
+  }
+  vector<char> data;
+  auto result = GetResponse(mbox, responder, data);
+
+  if (result != op) {
+    cout << "Failed to get permission." << endl;
+    return "";
+  }
+  cout << "Permission granted." << endl;
+  return string(begin(data),end(data));
+}
+
+void ReleasePermission(mailbox &mbox, int op, string file, string responder) {
+  auto ret = SP_multicast(mbox, SAFE_MESS, responder.c_str(),
+                          op,	 file.size(), file.c_str());
+  if (ret < 0) {
+    cout << "Failed sending the request." << endl;
+    return;
+  }
+  cout << "Permission released." << endl;
+
+}
 
 uint16_t ReadUserOperation() {
   cout << kFileCreate << " - Create File" << endl;
@@ -164,22 +181,58 @@ void SpreadRun() {
     return;
   }
 
-  char sender[MAX_GROUP_NAME] = "#r6055-10#localhost";
+  string filename, responder, slave;
 
   bool run = true;
   while (run) {
     switch(ReadUserOperation()) {
-    case kFileCreate:
-      RequestCreate(mbox, sender);
+      case kFileCreate:
+      cout << "Please provide a file name: ";
+      cin >> filename;
+      slave = AskPermission(mbox, kFileCreate, filename, responder);
+      if (slave.empty()) {
+        cout << "Failed getting permission." << endl;
+        continue;
+      }
+      cout << "Slave: " << slave << endl;
+      RequestCreate(mbox, slave, filename);
+      ReleasePermission(mbox, kFileCreate, filename, responder);
       break;
     case kFileRemove:
-      RequestRemove(mbox, sender);
+      cout << "Please provide a file name: ";
+      cin >> filename;
+      slave = AskPermission(mbox, kFileRemove, filename, responder);
+      if (slave.empty()) {
+        cout << "Failed getting permission." << endl;
+        continue;
+      }
+      cout << "Slave: " << slave << endl;
+      RequestRemove(mbox, slave, filename);
+      ReleasePermission(mbox, kFileRemove, filename, responder);
       break;
     case kFileRead:
-      RequestRead(mbox, sender);
+      cout << "Please provide a file name: ";
+      cin >> filename;
+      slave = AskPermission(mbox, kFileRead, filename, responder);
+      if (slave.empty()) {
+        cout << "Failed getting permission." << endl;
+        continue;
+      }
+      cout << "Slave: " << slave << endl;
+      RequestRead(mbox, slave, filename);
+      ReleasePermission(mbox, kFileRead, filename, responder);
       break;
     case kFileWrite:
-      RequestWrite(mbox, sender);
+      cout << "Please provide a file name: ";
+      cin >> filename;
+      slave = AskPermission(mbox, kFileWrite, filename, responder);
+      if (slave.empty()) {
+        cout << "Failed getting permission." << endl;
+        continue;
+      }
+      cout << "Slave: " << slave << endl;
+      RequestWrite(mbox, slave, filename);
+      ReleasePermission(mbox, kFileWrite, filename, responder);
       break;
     default:
       cout << "Goodbye." << endl;
