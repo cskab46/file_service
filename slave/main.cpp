@@ -8,11 +8,10 @@ extern "C" {
 }
 
 #include "fs.h"
-#include "fileop.h"
+#include "../server/fileop.h"
+#include "../server/groups.h"
 
 using namespace std;
-
-const char *kGroup = "SLAVES";
 
 void HandleFileOpCreate(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, const size_t size);
 void HandleFileOpRemove(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size);
@@ -87,12 +86,15 @@ void SpreadRun() {
     return;
   }
   cout << "Connection succeeded. group: " << group << endl;
+  if (!InitStorage(group)) {
+    cout << "Failed initializing storage node " << group << endl;
+  }
 
-  if (SP_join(mbox, kGroup)) {
-    cout << "Failed to join " << kGroup << endl;
+  if (SP_join(mbox, kSlavesGroup)) {
+    cout << "Failed to join " << kSlavesGroup << endl;
     return;
   }
-  SP_multicast(mbox, SAFE_MESS, kGroup, kSlaveMessage, strlen(group), group);
+  SP_multicast(mbox, SAFE_MESS, kSlavesGroup, kSlaveMessage, strlen(group), group);
 
   char sender[MAX_GROUP_NAME];
   char groups[32][MAX_GROUP_NAME];
@@ -134,6 +136,6 @@ void SpreadRun() {
       break;
     }
   }
-  SP_leave(mbox, kGroup);
+  SP_leave(mbox, kSlavesGroup);
   SP_disconnect(mbox);
 }

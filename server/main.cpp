@@ -15,26 +15,16 @@ extern "C" {
   #include <unistd.h>
 }
 
-#include "../slave/fileop.h"
+#include "fileop.h"
+#include "messages.h"
+#include "groups.h"
 
 using namespace std;
 using namespace std::chrono;
 
-const char* kProxyGroup = "SERVERS";
-const char* kLeadershipGroup = "LEADERSHIP";
-const char* kSlavesGroup = "SLAVES";
-
 // Bully
 int gId;
 const double kTimeout = 1000;// timeout in seconds for the bully election to take place
-const short kElectionMessage = 0xDEAD;
-const short kAnswerMessage = 0xCAFE;
-const short kCoordinatorMessage = 0xBEEF;
-
-const short kLogMessage = 0xD1CA;
-
-const short kSlaveMessage = 0x51A7;
-const short kNoMessage = 0xFFFF;
 
 struct Message {
   int service;
@@ -168,11 +158,19 @@ void Leadership(atomic<bool> &lead) {
 mutex slaves_mutex;
 vector<string> slaves;
 
+#include "ordered_lock.h"
+
 mutex locks_mutex;
 // file -> (slave, owner)
-map<string,pair<string,string>> locks;
+struct file_lock {
+  string slave;
+  string owner;
+  ordered_lock lock;
+};
 
-void HandleOperation(const Message &request) {
+map<string, file_lock> locks;
+
+void HandleOperation(Message request) {
   mailbox mbox;
   char group[MAX_PRIVATE_NAME];
   auto ret = SP_connect_timeout("", NULL, 0, 0, &mbox, group, sp_time{5,0});
@@ -182,17 +180,22 @@ void HandleOperation(const Message &request) {
   auto has_entry = locks.count(file);
   locks_mutex.unlock();
   string slave;
+  cout << "Request " << endl;
+  cout << "Type: " << request.type << endl;
+  cout << "Sender: " << request.sender << endl;
+  cout << "Data: " << string(begin(request.data), end(request.data)) << endl;
   switch(request.type) {
   case kFileCreate:
+    slaves_mutex.lock();
     if (has_entry || slaves.empty()) {
+      slaves_mutex.unlock();
       SP_multicast(mbox, SAFE_MESS, request.sender.c_str(), kFileCreateFail, request.data.size(), request.data.data());
       return;
     }
-    slaves_mutex.lock();
     slave = slaves[rand()%slaves.size()];
     slaves_mutex.unlock();
     locks_mutex.lock();
-    locks[file].first = slave;
+    locks[file].slave = slave;
     locks_mutex.unlock();
     break;
   case kFileRemove:
@@ -218,21 +221,20 @@ void HandleOperation(const Message &request) {
     return;
   }
 
-  bool own = false;
-  while (!own) {
+  {
     locks_mutex.lock();
-    slave = locks[file].first;
-    if(locks[file].second.empty()) {
-      own = true;
-      locks[file].second = request.sender;
-      locks_mutex.unlock();
-      auto msg = to_string(file.size()) + "#" + file +
-          to_string(slave.size()) + "#" + slave +
-          to_string(request.sender.size()) + "#" + request.sender;
-      SP_multicast(mbox, SAFE_MESS, kProxyGroup, kLogMessage, msg.size(), msg.data());
-    } else this_thread::sleep_for(milliseconds(500));
+    auto &f_lock = locks[file];
+    locks_mutex.unlock();
+
+    slave = f_lock.slave;
+    f_lock.lock.lock();
+    f_lock.owner = request.sender;
   }
 
+  auto msg = to_string(file.size()) + "#" + file +
+      to_string(slave.size()) + "#" + slave +
+      to_string(request.sender.size()) + "#" + request.sender;
+  SP_multicast(mbox, SAFE_MESS, kProxyGroup, kLogMessage, msg.size(), msg.data());
 
   if (SP_multicast(mbox, SAFE_MESS, request.sender.c_str(), request.type, slave.size(), slave.c_str()) > 0) {
     while(true) {
@@ -243,14 +245,18 @@ void HandleOperation(const Message &request) {
       }
     }
   }
+  {
+    locks_mutex.lock();
+    auto &f_lock = locks[file];
+    locks_mutex.unlock();
 
-  locks_mutex.lock();
-  locks[file].second.clear();
-  auto msg = to_string(file.size()) + "#" + file +
+    f_lock.owner.clear();
+    f_lock.lock.unlock();
+  }
+  msg = to_string(file.size()) + "#" + file +
       to_string(slave.size()) + "#" + slave +
       "0#";
   SP_multicast(mbox, SAFE_MESS, kProxyGroup, kLogMessage, msg.size(), msg.data());
-  locks_mutex.unlock();
 
   SP_disconnect(mbox);
 }
@@ -269,8 +275,13 @@ void HandleLog(const Message &log) {
   auto owner = msg.substr(third_m + 1, owner_size);
 
   locks_mutex.lock();
-  locks[file].first = slave;
-  locks[file].second = owner;
+  locks[file].slave = slave;
+  locks[file].owner = owner;
+  if( owner.empty() ) {
+    locks[file].lock.unlock();
+  } else {
+    locks[file].lock.lock();
+  }
   locks_mutex.unlock();
 }
 
@@ -309,7 +320,7 @@ void Slaves() {
 
     vector<string> del;
     locks_mutex.lock();
-    for (auto &d : down) for (auto &f : locks) if (f.second.first == d) del.push_back(f.first);
+    for (auto &d : down) for (auto &f : locks) if (f.second.slave == d) del.push_back(f.first);
     for (auto &f: del) locks.erase(f);
     locks_mutex.unlock();
   }
@@ -336,7 +347,7 @@ void Proxy(atomic<bool> &lead) {
     if (msg.type == kLogMessage && !lead) {
       HandleLog(msg);
     } else if (lead) {
-      thread t(HandleOperation, ref(msg));
+      thread t(HandleOperation, msg);
       t.detach();
     } else {
       //...

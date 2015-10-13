@@ -8,12 +8,21 @@
 #include <algorithm>
 using namespace std;
 
-std::vector<std::string> gFiles;
-bool HasFile(const std::string &file) {
-  bool has = gFiles.end() != find(begin(gFiles), end(gFiles), file);
-  cout << "HasFile: " << has << endl;
-  return has;
+string gFolderName;
+
+bool InitStorage(string volume) {
+  struct stat st;
+  if (stat(volume.c_str(), &st) == 0) {
+    return false;
+  }
+  if (mkdir(volume.c_str(), 0700)) {
+      return false;
+  }
+  gFolderName = volume + "/";
+  return true;
 }
+
+std::vector<std::string> gFiles;
 
 int test() {
 
@@ -36,39 +45,41 @@ int test() {
   return 0;
 }
 
-bool Exists(const std::string &filename) {
+bool Exists(std::string filename) {
+  filename = gFolderName + filename;
   struct stat buffer;
   cout << "Exists: " << stat(filename.c_str(), &buffer) << endl;
   cout << errno << endl;
   return 0 == stat(filename.c_str(), &buffer);
 }
 
-bool CreateFile(const std::string &filename) {
+bool CreateFile(std::string filename) {
+  filename = gFolderName + filename;
   if (Exists(filename)) return false;
   std::ofstream out(filename, std::ios::out | std::ios::binary);
   gFiles.push_back(filename);
   return true;
 }
 
-bool RemoveFile(const std::string &filename) {
+bool RemoveFile(std::string filename) {
+  filename = gFolderName + filename;
   if (!Exists(filename)) return false;
-  if (!HasFile(filename)) return false;
   return 0 == remove(filename.c_str());
 }
 
-bool WriteFile(const std::string &filename, const std::string &data) {
+bool WriteFile(std::string filename, const std::string &data) {
+  filename = gFolderName + filename;
   if (!Exists(filename)) return false;
-  if (!HasFile(filename)) return false;
   std::ofstream out(filename, std::ios::out | std::ios::binary);
   if (!out.good()) return false;
   out << data;
   return true;
 }
 
-bool ReadFile(const std::string &filename, std::string &data) {
+bool ReadFile(std::string filename, std::string &data) {
+  filename = gFolderName + filename;
   cout << "File to be read: " << filename;
   if (!Exists(filename)) return false;
-  if (!HasFile(filename)) return false;
   std::ifstream input(filename, std::ios::binary);
   if (!input.good()) {
     cout << "Input not good." << endl;

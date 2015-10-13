@@ -8,12 +8,11 @@ extern "C" {
   #include <unistd.h>
 }
 
-#include "../slave/fileop.h"
+#include "../server/fileop.h"
+#include "../server/groups.h"
 
 using namespace std;
 
-const char *kGroup = "CLIENTS";
-const char *kServerGroup = "SERVERS";
 
 void RequestCreate(mailbox &mbox, string sender, string filename);
 void RequestRemove(mailbox &mbox, string sender, string filename);
@@ -128,7 +127,7 @@ void RequestWrite(mailbox &mbox, string sender, string filename) {
   cout << "File written successfully." << endl;
  }
 string AskPermission(mailbox &mbox, int op, string file , string &responder) {
-  auto ret = SP_multicast(mbox, SAFE_MESS, kServerGroup,
+  auto ret = SP_multicast(mbox, SAFE_MESS, kProxyGroup,
                           op,	file.size(), file.c_str());
   if (ret < 0) {
     cout << "Failed sending the request." << endl;
