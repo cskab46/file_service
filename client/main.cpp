@@ -8,6 +8,7 @@ extern "C" {
   #include <unistd.h>
 }
 
+#include "../server/messages.h"
 #include "../server/fileop.h"
 #include "../server/groups.h"
 
@@ -147,6 +148,13 @@ string AskPermission(mailbox &mbox, int op, string file , string &responder) {
 void ReleasePermission(mailbox &mbox, int op, string file, string responder) {
   auto ret = SP_multicast(mbox, SAFE_MESS, responder.c_str(),
                           op,	 file.size(), file.c_str());
+  if (ret < 0) {
+    cout << "Failed sending the request." << endl;
+    return;
+  }
+  auto msg = to_string(op) + "#" + file;
+  ret = SP_multicast(mbox, SAFE_MESS, kProxyGroup,
+                          kClientLogMessage,	 msg.size(), msg.c_str());
   if (ret < 0) {
     cout << "Failed sending the request." << endl;
     return;

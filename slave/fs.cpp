@@ -46,7 +46,6 @@ int test() {
 }
 
 bool Exists(std::string filename) {
-  filename = gFolderName + filename;
   struct stat buffer;
   cout << "Exists: " << stat(filename.c_str(), &buffer) << endl;
   cout << errno << endl;
@@ -64,7 +63,10 @@ bool CreateFile(std::string filename) {
 bool RemoveFile(std::string filename) {
   filename = gFolderName + filename;
   if (!Exists(filename)) return false;
-  return 0 == remove(filename.c_str());
+  cout << "Trying to remove file: " << filename << endl;
+  auto res = 0 == remove(filename.c_str());
+  cout  << "Result: " << res << endl;
+  return res;
 }
 
 bool WriteFile(std::string filename, const std::string &data) {

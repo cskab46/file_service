@@ -234,7 +234,7 @@ void HandleOperation(Message request) {
   auto msg = to_string(file.size()) + "#" + file +
       to_string(slave.size()) + "#" + slave +
       to_string(request.sender.size()) + "#" + request.sender;
-  SP_multicast(mbox, SAFE_MESS, kProxyGroup, kLogMessage, msg.size(), msg.data());
+  SP_multicast(mbox, SAFE_MESS, kProxyGroup, kServerLogMessage, msg.size(), msg.data());
 
   if (SP_multicast(mbox, SAFE_MESS, request.sender.c_str(), request.type, slave.size(), slave.c_str()) > 0) {
     while(true) {
@@ -249,40 +249,63 @@ void HandleOperation(Message request) {
     locks_mutex.lock();
     auto &f_lock = locks[file];
     locks_mutex.unlock();
-
     f_lock.owner.clear();
     f_lock.lock.unlock();
+
+    locks_mutex.lock();
+    if (request.type == kFileRemove) {
+      locks.erase(file);
+    }
+    locks_mutex.unlock();
   }
   msg = to_string(file.size()) + "#" + file +
       to_string(slave.size()) + "#" + slave +
       "0#";
-  SP_multicast(mbox, SAFE_MESS, kProxyGroup, kLogMessage, msg.size(), msg.data());
+  SP_multicast(mbox, SAFE_MESS, kProxyGroup, kServerLogMessage, msg.size(), msg.data());
 
   SP_disconnect(mbox);
 }
 
 void HandleLog(const Message &log) {
-  auto msg = string(begin(log.data), end(log.data));
-  auto first_m = msg.find_first_of('#');
-  auto second_m = msg.find_first_of('#', first_m + 1);
-  auto third_m = msg.find_first_of('#', second_m + 1);
+  if (kServerLogMessage == log.type) {
+    auto msg = string(begin(log.data), end(log.data));
+    auto first_m = msg.find_first_of('#');
+    auto second_m = msg.find_first_of('#', first_m + 1);
+    auto third_m = msg.find_first_of('#', second_m + 1);
 
-  auto file_size = stoi(msg);
-  auto file = msg.substr(first_m + 1, file_size);
-  auto slave_size = stoi(msg.substr(first_m+1+file_size));
-  auto slave = msg.substr(second_m + 1, slave_size);
-  auto owner_size = stoi(msg.substr(second_m+1+slave_size));
-  auto owner = msg.substr(third_m + 1, owner_size);
+    auto file_size = stoi(msg);
+    auto file = msg.substr(first_m + 1, file_size);
+    auto slave_size = stoi(msg.substr(first_m+1+file_size));
+    auto slave = msg.substr(second_m + 1, slave_size);
+    auto owner_size = stoi(msg.substr(second_m+1+slave_size));
+    auto owner = msg.substr(third_m + 1, owner_size);
 
-  locks_mutex.lock();
-  locks[file].slave = slave;
-  locks[file].owner = owner;
-  if( owner.empty() ) {
-    locks[file].lock.unlock();
+    locks_mutex.lock();
+    locks[file].slave = slave;
+    locks[file].owner = owner;
+    if( owner.empty() ) {
+      locks[file].lock.unlock();
+    } else {
+      locks[file].lock.lock();
+    }
+    locks_mutex.unlock();
+  } else if (kClientLogMessage == log.type) { // Triggered on client release of lock
+    auto msg = string(begin(log.data), end(log.data));
+    auto first_m = msg.find_first_of('#');
+    auto file_op = stoi(msg);
+    auto file = msg.substr(first_m + 1);
+    locks_mutex.lock();
+    if (!locks[file].owner.empty()) { // not already released?
+      locks[file].owner.clear();
+      locks[file].lock.unlock();
+    }
+    if (kFileRemove == file_op) {
+      locks.erase(file);
+    }
+    locks_mutex.unlock();
   } else {
-    locks[file].lock.lock();
+    cout << "Invalid log message." << endl;
   }
-  locks_mutex.unlock();
 }
 
 void Slaves() {
@@ -344,7 +367,7 @@ void Proxy(atomic<bool> &lead) {
   while (true) {
     if (SP_poll(mbox) <= 0) continue;
     auto msg = GetMessage(mbox);
-    if (msg.type == kLogMessage && !lead) {
+    if ((msg.type == kServerLogMessage || msg.type == kClientLogMessage) && !lead) {
       HandleLog(msg);
     } else if (lead) {
       thread t(HandleOperation, msg);
