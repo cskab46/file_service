@@ -30,7 +30,7 @@ struct Message {
   int service;
   int16_t type;
   string sender;
-  vector<char> data;
+  vector<string> args;
   vector<string> group;
 };
 
@@ -48,25 +48,29 @@ bool ParseArgs(int argc, char **argv) {
   return true;
 }
 
-Message GetMessage(mailbox &mbox);
-
 Message GetMessage(mailbox &mbox) {
   char sender[MAX_GROUP_NAME];
   char groups[32][MAX_GROUP_NAME];
   int num_groups, endian, sv_type = 0, ret;
-  Message response; response.data.resize(0);
+  Message response;
+  vector<char> data;
 retry:
   ret = SP_receive(mbox, &sv_type, sender, 32, &num_groups,
                    groups, &response.type, &endian,
-                   response.data.size(), response.data.data());
+                   data.size(), data.data());
   response.sender = sender;
   response.service = sv_type;
   if (BUFFER_TOO_SHORT == ret) {
-    response.data.resize(-endian);
+    data.resize(-endian);
     goto retry;
   } else if (ret < 0) {
-    response.type = kNoMessage;
+    response.type = kCorruptedMessage;
   }
+  Arguments tmp(string(data.data(), data.size()));
+  if (!tmp.Deserialize(response.args)) {
+    response.type = kCorruptedMessage;
+  }
+
   for (int i = 0; i < num_groups; i++) response.group.push_back(groups[i]);
   return response;
 }
@@ -143,8 +147,11 @@ void Leadership(atomic<bool> &lead) {
       candidates.push_back(msg.sender);
       break;
     case kCoordinatorMessage:
-      lead = (string(msg.data.data(), msg.data.size())== me);
-      cout << "New Coordinator: " << string(msg.data.data(), msg.data.size()) << endl;
+      if (1 != msg.args.size()) {
+        cout << "Invalid coordinator message." << endl;
+      }
+      lead = msg.args[0] == me;
+      cout << "New Coordinator: " << msg.args[0] << endl;
       break;
     default:
       cout << "Spurious message received." << endl;
@@ -156,40 +163,84 @@ void Leadership(atomic<bool> &lead) {
 }
 
 mutex slaves_mutex;
-vector<string> slaves;
+map<string, size_t> slaves; // slave -> file count
 
 #include "ordered_lock.h"
 
 mutex locks_mutex;
 // file -> (slave, owner)
 struct file_lock {
-  string slave;
+  vector<string> slaves;
   string owner;
   ordered_lock lock;
 };
 
 map<string, file_lock> locks;
 
+void HandleCreate(mailbox &mbox, Message &req) {
+  auto args = req.args;
+  if (args.size() != 2) {
+    string msg = "Invalid number of arguments for Create operation.";
+    SP_multicast(mbox, SAFE_MESS, req.sender.c_str(), kFileCreateFail, msg.size(), msg.data());
+    return;
+  }
+  string file_name;
+  size_t redundancy;
+  try {
+    file_name = args[0];
+    redundancy = stoi(args[1]);
+  } catch (...) {
+    string msg = "Invalid arguments for Create operation. Expected name followed by redundancy number.";
+    SP_multicast(mbox, SAFE_MESS, req.sender.c_str(), kFileCreateFail, msg.size(), msg.data());
+    return;
+  }
+  if (redundancy <= 0) {
+    string msg = "Invalid redundancy. Redundancy must be a strict positive number.";
+    SP_multicast(mbox, SAFE_MESS, req.sender.c_str(), kFileCreateFail, msg.size(), msg.data());
+    return;
+  }
+  if (file_name.empty()) {
+    string msg = "Empty file_name.";
+    SP_multicast(mbox, SAFE_MESS, req.sender.c_str(), kFileCreateFail, msg.size(), msg.data());
+    return;
+  }
+
+  locks_mutex.lock();
+  auto has_entry = locks.count(file_name);
+  locks_mutex.unlock();
+  if (has_entry) {
+    string msg = "A file with this name already exists.";
+    SP_multicast(mbox, SAFE_MESS, req.sender.c_str(), kFileCreateFail, msg.size(), msg.data());
+    return;
+  }
+  slaves_mutex.lock();
+  size_t slaves_num = slaves.size();
+  slaves_mutex.unlock();
+
+  if (slaves_num < redundancy) {
+    string msg = "Requested redundancy cannot be serviced. Maximum redundancy is " << redundancy << ".";
+    SP_multicast(mbox, SAFE_MESS, req.sender.c_str(), kFileCreateFail, msg.size(), msg.data());
+    return;
+  }
+  // TODO: choose redundancy slaves and create the file.
+
+}
+
 void HandleOperation(Message request) {
   mailbox mbox;
   char group[MAX_PRIVATE_NAME];
   auto ret = SP_connect_timeout("", NULL, 0, 0, &mbox, group, sp_time{5,0});
   if (ACCEPT_SESSION != ret) return;
-  auto file = string(begin(request.data), end(request.data));
+  auto file = request.args[0];
   locks_mutex.lock();
   auto has_entry = locks.count(file);
   locks_mutex.unlock();
   string slave;
-  cout << "Request " << endl;
-  cout << "Type: " << request.type << endl;
-  cout << "Sender: " << request.sender << endl;
-  cout << "Data: " << string(begin(request.data), end(request.data)) << endl;
   switch(request.type) {
   case kFileCreate:
     slaves_mutex.lock();
     if (has_entry || slaves.empty()) {
       slaves_mutex.unlock();
-      SP_multicast(mbox, SAFE_MESS, request.sender.c_str(), kFileCreateFail, request.data.size(), request.data.data());
       return;
     }
     slave = slaves[rand()%slaves.size()];
@@ -370,6 +421,7 @@ void Proxy(atomic<bool> &lead) {
     if ((msg.type == kServerLogMessage || msg.type == kClientLogMessage) && !lead) {
       HandleLog(msg);
     } else if (lead) {
+
       thread t(HandleOperation, msg);
       t.detach();
     } else {
