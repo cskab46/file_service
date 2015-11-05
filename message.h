@@ -29,7 +29,7 @@ const short kCorruptedMessage = 0xFFFF;
 
 class Message {
 public:
-  Message(uint16_t type, int service);
+  Message(int16_t type, int service);
   bool IsMembership(); // Is this a membership message?
   string sender() const;
   void set_sender(const string &sender);
@@ -37,10 +37,10 @@ public:
   void set_group(const vector<string> &group);
   string data() const;
   void set_data(const string &data);
-  uint16_t type() const;
+  int16_t type() const;
   int service() const;
   template <typename T> void SetContent(const T &content);
-  template <typename T> T GetContent();
+  template <typename T> void GetContent(T &content);
 
 private:
   string sender_;
@@ -50,19 +50,17 @@ private:
   int service_;
 };
 
-template<typename T> T Message::GetContent() {
-  T content;
+template<typename T> void Message::GetContent(T &content) {
   stringstream ss{data_};
   text_iarchive ia(ss);
   ia & content;
-  return content;
 }
 
 template<typename T> void Message::SetContent(const T &content) {
   stringstream ss;
   text_oarchive oa{ss};
   oa & content;
-  ss >> data_;
+  data_ = ss.str();
 }
 
 #endif // MESSAGE_H

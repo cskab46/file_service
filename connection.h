@@ -10,12 +10,16 @@ extern "C" {
 
 using namespace std;
 
-class Connection
-{
+class Connection {
 public:
-  static bool Connect(bool membership_msgs, Connection &con);
+  static Connection Connect(bool &err, bool membership_msgs = false);
+  static Connection Connect(const string &name, bool &err,
+                            bool membership_msgs = false);
+  static Connection Connect(const string &server, const string &name, bool &err,
+                            bool membership_msgs = false);
   virtual ~Connection();
   string identifier() const;
+  bool JoinGroup(const string &group);
   bool HasMessage();
   const Message GetMessage();
   bool SendMessage(const Message &msg, const string &to);

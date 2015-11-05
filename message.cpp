@@ -4,7 +4,7 @@ extern "C" {
   #include <sp.h>
 }
 
-Message::Message(uint16_t type, int service)
+Message::Message(int16_t type, int service)
   : type_(type),
     service_(service) {}
 
@@ -35,7 +35,7 @@ void Message::set_data(const string &data) {
   data_ = data;
 }
 
-uint16_t Message::type() const {
+int16_t Message::type() const {
   return type_;
 }
 

@@ -7,14 +7,21 @@ Connection::Connection(const mailbox &mbox, const string &identifier)
   : mbox_(mbox),
     identifier_(identifier) {}
 
-bool Connection::Connect(bool membership_msgs, Connection &con) {
+Connection Connection::Connect(bool &err, bool membership_msgs) {
+  return Connect("", err, membership_msgs);
+}
+
+Connection Connection::Connect(const string &name, bool &err, bool membership_msgs) {
+  return Connect("", name, err, membership_msgs);
+}
+
+Connection Connection::Connect(const string &server, const string &name, bool &err, bool membership_msgs) {
   mailbox mbox;
   char group[MAX_PRIVATE_NAME];
-  auto ret = SP_connect_timeout("", NULL, 0, membership_msgs ? 1 : 0,
+  auto ret = SP_connect_timeout(server.c_str(), name.c_str(), 0, membership_msgs ? 1 : 0,
                                 &mbox, group, sp_time{kConnectTimeout,0});
-  if (ACCEPT_SESSION != ret) false;
-  con = Connection(mbox, group);
-  return true;
+  err = (ACCEPT_SESSION != ret);
+  return Connection(mbox, group);
 }
 
 Connection::~Connection() {
@@ -23,6 +30,10 @@ Connection::~Connection() {
 
 string Connection::identifier() const {
   return identifier_;
+}
+
+bool Connection::JoinGroup(const string &group) {
+  return 0 == SP_join(mbox_, group.c_str());
 }
 
 bool Connection::HasMessage() {
@@ -48,6 +59,7 @@ retry:
     type = kCorruptedMessage;
   }
   string data((char*)buffer, buffer_size);
+  cout << "Data received: " << data << endl;
   free(buffer);
   vector<string> tmp;
   for (int i = 0; i < num_groups; i++) tmp.push_back(groups[i]);
@@ -60,6 +72,7 @@ retry:
 
 bool Connection::SendMessage(const Message &msg, const string &to) {
   auto data = msg.data();
+  cout << "Data to send: " << data << endl;
   return SP_multicast(mbox_, msg.service(), to.data(), msg.type(),
                       data.size(), data.data()) >= 0;
 }
