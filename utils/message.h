@@ -40,7 +40,7 @@ public:
   int16_t type() const;
   int service() const;
   template <typename T> void SetContent(const T &content);
-  template <typename T> void GetContent(T &content);
+  template <typename T> void GetContent(T &content) const;
 
 private:
   string sender_;
@@ -50,7 +50,7 @@ private:
   int service_;
 };
 
-template<typename T> void Message::GetContent(T &content) {
+template<typename T> void Message::GetContent(T &content) const {
   stringstream ss{data_};
   text_iarchive ia(ss);
   ia & content;

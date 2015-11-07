@@ -12,11 +12,9 @@
 
 using namespace std::chrono;
 
-#include "server/ordered_lock.h"
-
-#include "connection.h"
-#include "message.h"
-#include "groups.h"
+#include "utils/connection.h"
+#include "utils/message.h"
+#include "utils/groups.h"
 
 const double kElectionTimeout = 1000;
 
@@ -27,11 +25,9 @@ const double kElectionTimeout = 1000;
  * @return true if the election is won. false otherwise.
  */
 bool BullyElection(const vector<string> &rivals) {
-  cout << "Election started." << endl;
   bool err;
   auto con = Connection::Connect(err);
   if (err) {
-    cout << "Failed to connect with spread dawmon to perform election." << endl;
     return false;
   }
   for (auto &rival : rivals)
@@ -41,12 +37,10 @@ bool BullyElection(const vector<string> &rivals) {
     if (con.HasMessage()) {
       auto msg = con.GetMessage();
       if (msg.type() == kAnswerMessage) {
-        cout << "Election lost." << endl;
         return false;
       }
     }
   }
-  cout << "Election won." << endl;
   return true;
 }
 
@@ -88,9 +82,6 @@ void Leadership(const string &priority, bool &lead, const bool &quit) {
       auto group = msg.group();
       copy_if(begin(group), end(group), back_inserter(rivals),
               [&] (const string &s) {
-        cout << "Me: " << con.identifier() << endl;
-        cout << "Other: " << s << endl;
-
         return stoi(con.identifier().substr(1)) < stoi(s.substr(1));});
       election_result = async(launch::async, BullyElection, rivals);
       continue;

@@ -59,7 +59,6 @@ retry:
     type = kCorruptedMessage;
   }
   string data((char*)buffer, buffer_size);
-  cout << "Data received: " << data << endl;
   free(buffer);
   vector<string> tmp;
   for (int i = 0; i < num_groups; i++) tmp.push_back(groups[i]);
@@ -72,7 +71,6 @@ retry:
 
 bool Connection::SendMessage(const Message &msg, const string &to) {
   auto data = msg.data();
-  cout << "Data to send: " << data << endl;
   return SP_multicast(mbox_, msg.service(), to.data(), msg.type(),
                       data.size(), data.data()) >= 0;
 }
