@@ -4,18 +4,21 @@
 #include <thread>
 
 using namespace std;
+using namespace chrono;
 
 
 #include "utils/connection.h"
 #include "utils/message.h"
 #include "utils/groups.h"
 #include "utils/file_ops.h"
+#include "utils/slave_ops.h"
+#include "utils/client_ops.h"
 #include "utils/file_lock_map.h"
 
 static FileLockMap gFileMap;
 
-ordered_lock  gSlavesLock;
-static vector<pair<string, vector<string>> gSlaves; // slaves -> files mapping
+static ordered_lock  gSlavesLock;
+static vector<pair<string, vector<string>>> gSlaves; // slaves -> files mapping
 
 
 void HandleCreate(const Message &msg, Connection &con);
@@ -96,25 +99,84 @@ void HandleCreate(const Message &msg, Connection &con) {
     msg.GetContent(op);
     cout << msg.sender() << " requested createop with args: " << op.file_name <<
             " and " << op.redundancy << endl;
+    if (gFileMap.HasFile(op.file_name)) {
+      cout << "Create request failed. File already exists." << endl;
+      return;
+    }
+
     gSlavesLock.lock();
-    auto tmp_slv = gSlaves;
+    vector<string> tmp_slv;
+    transform(begin(gSlaves), end(gSlaves), begin(tmp_slv), [](const pair<string,vector<string>> &a) {return a.first;});
     gSlavesLock.unlock();
     if (op.redundancy > tmp_slv.size()) {
       cout << "Requested redundancy cannot be met. Available: " << tmp_slv.size() << endl;
       return;
     }
 
-    auto slaves = vector(begin(tmp_slv), begin(tmp_slv) + op.redundancy);
+    vector<string> slaves(begin(tmp_slv), begin(tmp_slv) + op.redundancy);
     auto client = msg.sender();
-
-    // TODO: Send request to slaves and once the request is confirmed persist information
-    if (!gFileMap.CreateFile(op.file_name, slaves)) {
-      cout << "Create Failed: File entry already exists." << endl;
+    
+    // Send message to master slave(first) to prepare for client operation
+    bool err;
+		auto con = Connection::Connect(err);
+		if (err) {
+			cout << "Failed to connect with spread daemon." << endl;
+      return;
+		}
+    Message slave_prep(kSlavePrepareOp, SAFE_MESS);
+    slave_prep.SetContent(SlaveOp{op.file_name, client, slaves});
+    if (!con.SendMessage(slave_prep, slaves.front())) {
+      cout << "Failed to prepare slaves for operation." << endl;
+      return;
+    }
+    Message client_prep(kClientPrepareOp, SAFE_MESS);
+    client_prep.SetContent(ClientOp{op.file_name, slaves.front()});
+    if (!con.SendMessage(client_prep, client)) {
+      cout << "Failed to prepare client for operation." << endl;
       return;
     }
 
+    auto start = steady_clock::now();
+    bool confirmed = false;
+    while (!confirmed &&
+           duration_cast<milliseconds>(steady_clock::now() - start).count() < kCreateTimeout) {
+      if (!con.HasMessage()) continue;
+      auto msg = con.GetMessage();
+      if (msg.type() == kSlaveConfirmOp && msg.sender() == slaves.front()) {
+        SlaveOp cop;
+        msg.GetContent(cop);
+        confirmed = cop.client == client && cop.file_name == op.file_name;
+      }
+    }
 
-    cout << "Create Succeeded. Redundancy: " << slaves.size() << endl;
+    if (!confirmed) {
+      cout << "Storage slaves did not confirm operation." << endl;
+      Message client_fail(kClientFailOp, SAFE_MESS);
+      client_fail.SetContent(ClientOp{op.file_name, slaves.front()});
+      if (!con.SendMessage(client_fail, client)) {
+        cout << "Failed to inform client of failure." << endl;
+      }
+      return;
+    }
+
+    if (!gFileMap.CreateFile(op.file_name, slaves)) {
+      cout << "Failed to create entry. File was created in the meantime." << endl;
+      Message slave_fail(kSlaveFailOp, SAFE_MESS);
+      slave_fail.SetContent(SlaveOp{op.file_name, client, slaves});
+      if (!con.SendMessage(slave_fail, slaves.front())) {
+        cout << "Failed to inform slaves of failure." << endl;
+      }
+      return;
+    }
+
+    Message client_confirm(kClientConfirmOp, SAFE_MESS);
+    client_confirm.SetContent(ClientOp{op.file_name, slaves.front()});
+    if (!con.SendMessage(client_confirm, slaves.front())) {
+      cout << "Failed to inform client of file creation." << endl;
+    }
+
+    cout << "File '" << op.file_name << "' created. Main slave '"
+         << slaves.front() << "'. Redundancy " << slaves.size() << endl;
   } catch (...) {
     cout << "Invalid create request from " << msg.sender() << endl;
   }
@@ -200,16 +262,23 @@ void ManageSlaves(const bool &quit) {
 
     gSlavesLock.lock();
     // remove dead ones
-    gSlaves.erase(std::remove_if(begin(gSlaves), end(gSlaves), [] (auto entry) {
+    gSlaves.erase(std::remove_if(begin(gSlaves), end(gSlaves),
+                                 [slaves] (const pair<string, vector<string>> &entry) {
       return find(begin(slaves), end(slaves), entry.first) == end(slaves);
     }), end(gSlaves));
     // insert new ones
-    copy_if(begin(slaves), end(slaves), back_inserter(gSlaves), [] (auto slave) {
-      return find_if(begin(gSlaves), end(gSlaves), [] (auto entry) {
+    decltype(slaves) new_ones;
+    copy_if(begin(slaves), end(slaves), back_inserter(new_ones),
+            [] (const string &slave) {
+      return find_if(begin(gSlaves), end(gSlaves),
+                     [slave] (const pair<string, vector<string>> &entry) {
         return entry.first == slave; }) == end(gSlaves);
     });
+    transform(begin(new_ones), end(new_ones), end(gSlaves), [](const string &a) {return make_pair(a, vector<string>());});
     sort(begin(gSlaves), end(gSlaves),
-         [] (auto a, auto b) {return a.second.size() < b.second.size();});
+         [] (const pair<string, vector<string>> &a,
+         const pair<string, vector<string>> &b) {
+      return a.second.size() < b.second.size();});
     gSlavesLock.unlock();
   }
 }

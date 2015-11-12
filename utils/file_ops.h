@@ -2,19 +2,16 @@
 #include <string>
 #include <boost/serialization/access.hpp>
 
+const int kCreateTimeout = 2000;
+const int kRemoveTimeout = 2000;
+const int kReadTimeout = 2000;
+const int kWriteTimeout = 2000;
+
 enum : uint16_t {
   kFileCreate = 2,
   kFileRemove,
   kFileRead,
   kFileWrite,
-  kFileCreateSuccess,
-  kFileCreateFail,
-  kFileRemoveSuccess,
-  kFileRemoveFail,
-  kFileReadSuccess,
-  kFileReadFail,
-  kFileWriteSuccess,
-  kFileWriteFail
 };
 
 struct CreateFileOp {

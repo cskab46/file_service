@@ -12,6 +12,7 @@ using namespace std;
 
 class FileLockMap {
 public:
+  bool HasFile(const string &file);
   bool CreateFile(const string &file, const vector<string> &slaves);
   bool RemoveFile(const string &file);
   bool LockFile(const string &file, vector<string> &slaves);

@@ -7,20 +7,18 @@ using namespace std;
 
 
 enum : uint16_t {
-  kSlavePrepareOp = 2,
-  kSlaveConfirmOp,
-  kSlaveFailOp,
+  kClientPrepareOp = 2,
+  kClientConfirmOp,
+  kClientFailOp,
 };
 
-struct SlaveOp {
+struct ClientOp {
   string file_name;
-  string client;
-  vector<string> slaves;
+  string slave;
   friend class boost::serialization::access;
   template <typename Archive>
-  friend void serialize(Archive &ar, SlaveOp &op, const unsigned int version) {
+  friend void serialize(Archive &ar, ClientOp &op, const unsigned int version) {
     ar & op.file_name;
-    ar & op.client;
-    ar & op.slaves;
+    ar & op.slave;
   }
 };

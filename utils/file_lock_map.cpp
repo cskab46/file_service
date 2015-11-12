@@ -1,5 +1,12 @@
 #include "file_lock_map.h"
 
+bool FileLockMap::HasFile(const string &file) {
+  lock_.lock();
+  bool has = 0 != lock_map_.count(file);
+  lock_.unlock();
+  return has;
+}
+
 bool FileLockMap::CreateFile(const string &file, const vector<string> &slaves) {
   lock_.lock();
   if (lock_map_.count(file)) {
