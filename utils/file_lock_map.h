@@ -10,13 +10,17 @@
 
 using namespace std;
 
+struct FileEntry {
+  ordered_lock lock;
+  vector<string> slaves;
+};
+
 class FileLockMap {
 public:
   bool HasFile(const string &file);
-  bool CreateFile(const string &file, const vector<string> &slaves);
-  bool RemoveFile(const string &file);
-  bool LockFile(const string &file, vector<string> &slaves);
-  bool UnlockFile(const string &file);
+  bool CreateAndLockFile(const string &file, FileEntry **entry);
+  bool GetAndLockFile(const string &file, FileEntry **entry);
+  bool DestroyFile(const string &file);
 
   friend class boost::serialization::access;
   template <typename Archive>
@@ -26,7 +30,7 @@ public:
 
 private:
   ordered_lock lock_;
-  map<string, pair<ordered_lock, vector<string>>> lock_map_;
+  map<string, FileEntry> lock_map_;
 };
 
 

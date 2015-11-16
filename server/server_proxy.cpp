@@ -94,13 +94,25 @@ void Proxy(const bool &lead, const bool &quit) {
 }
 
 void HandleCreate(const Message &msg, Connection &con) {
+  FileEntry *entry = NULL;
   try {
+    bool err;
+    auto con = Connection::Connect(err);
+    if (err) {
+      cout << "Failed to connect with spread daemon." << endl;
+      return;
+    }
+
     CreateFileOp op;
     msg.GetContent(op);
     cout << msg.sender() << " requested createop with args: " << op.file_name <<
             " and " << op.redundancy << endl;
     if (gFileMap.HasFile(op.file_name)) {
       cout << "Create request failed. File already exists." << endl;
+      return;
+    }
+    if (!gFileMap.CreateAndLockFile(op.file_name, &entry)) {
+      cout << "Failed to create entry. File was created in the meantime." << endl;
       return;
     }
 
@@ -110,45 +122,65 @@ void HandleCreate(const Message &msg, Connection &con) {
     gSlavesLock.unlock();
     if (op.redundancy > tmp_slv.size()) {
       cout << "Requested redundancy cannot be met. Available: " << tmp_slv.size() << endl;
-      return;
+      goto release_file;
     }
 
     vector<string> slaves(begin(tmp_slv), begin(tmp_slv) + op.redundancy);
     auto client = msg.sender();
     
     // Send message to master slave(first) to prepare for client operation
-    bool err;
-		auto con = Connection::Connect(err);
-		if (err) {
-			cout << "Failed to connect with spread daemon." << endl;
-      return;
-		}
     Message slave_prep(kSlavePrepareOp, SAFE_MESS);
-    slave_prep.SetContent(SlaveOp{op.file_name, client, slaves});
+    slave_prep.SetContent(SlaveOp{op.file_name, client, "", slaves});
     if (!con.SendMessage(slave_prep, slaves.front())) {
       cout << "Failed to prepare slaves for operation." << endl;
-      return;
+      goto release_file;
     }
-    Message client_prep(kClientPrepareOp, SAFE_MESS);
-    client_prep.SetContent(ClientOp{op.file_name, slaves.front()});
-    if (!con.SendMessage(client_prep, client)) {
-      cout << "Failed to prepare client for operation." << endl;
-      return;
-    }
-
+    // Wait slave to confirm operation and to inform the handler
     auto start = steady_clock::now();
     bool confirmed = false;
+    string op_handler;
     while (!confirmed &&
            duration_cast<milliseconds>(steady_clock::now() - start).count() < kCreateTimeout) {
       if (!con.HasMessage()) continue;
       auto msg = con.GetMessage();
-      if (msg.type() == kSlaveConfirmOp && msg.sender() == slaves.front()) {
+      if (msg.type() == kSlaveConfirmOp) {
         SlaveOp cop;
         msg.GetContent(cop);
         confirmed = cop.client == client && cop.file_name == op.file_name;
+        op_handler = msg.sender();
+        break;
+      }
+    }
+    // Slaves are not responding to prepare op
+    if (!confirmed) {
+      cout << "Storage slaves are not responding." << endl;
+      goto release_file;
+    }
+
+    Message client_prep(kClientPrepareOp, SAFE_MESS);
+    client_prep.SetContent(ClientOp{op.file_name, op_handler});
+    if (!con.SendMessage(client_prep, client)) {
+      cout << "Failed to prepare client for operation." << endl;
+      goto release_file;
+    }
+
+    // Wait slave to confirm operation and to inform the handler
+    start = steady_clock::now();
+    confirmed = false;
+    while (!confirmed &&
+           duration_cast<milliseconds>(steady_clock::now() - start).count() < kCreateTimeout) {
+      if (!con.HasMessage()) continue;
+      auto msg = con.GetMessage();
+      if (msg.type() == kSlaveConfirmOp) {
+        SlaveOp cop;
+        msg.GetContent(cop);
+        confirmed = cop.client == client && cop.file_name == op.file_name;
+        op_handler = msg.sender();
+        break;
       }
     }
 
+    // Slave did not confirm
     if (!confirmed) {
       cout << "Storage slaves did not confirm operation." << endl;
       Message client_fail(kClientFailOp, SAFE_MESS);
@@ -156,18 +188,10 @@ void HandleCreate(const Message &msg, Connection &con) {
       if (!con.SendMessage(client_fail, client)) {
         cout << "Failed to inform client of failure." << endl;
       }
-      return;
+      goto release_file;
     }
 
-    if (!gFileMap.CreateFile(op.file_name, slaves)) {
-      cout << "Failed to create entry. File was created in the meantime." << endl;
-      Message slave_fail(kSlaveFailOp, SAFE_MESS);
-      slave_fail.SetContent(SlaveOp{op.file_name, client, slaves});
-      if (!con.SendMessage(slave_fail, slaves.front())) {
-        cout << "Failed to inform slaves of failure." << endl;
-      }
-      return;
-    }
+    entry->slaves = slaves;
 
     Message client_confirm(kClientConfirmOp, SAFE_MESS);
     client_confirm.SetContent(ClientOp{op.file_name, slaves.front()});
@@ -180,6 +204,10 @@ void HandleCreate(const Message &msg, Connection &con) {
   } catch (...) {
     cout << "Invalid create request from " << msg.sender() << endl;
   }
+release_file:
+  if (NULL != entry) {
+    entry->lock.unlock();
+  }
 }
 
 void HandleRemove(const Message &msg, Connection &con) {
@@ -188,7 +216,7 @@ void HandleRemove(const Message &msg, Connection &con) {
     msg.GetContent(op);
     cout << msg.sender() << " requested remove with args: " << op.file_name <<
             endl;
-    if (!gFileMap.RemoveFile(op.file_name)) {
+    if (!gFileMap.DestroyFile(op.file_name)) {
       cout << "Remove Failed: File entry does not exists." << endl;
       return;
     }
@@ -199,43 +227,43 @@ void HandleRemove(const Message &msg, Connection &con) {
 }
 
 void HandleRead(const Message &msg, Connection &con) {
-  try {
-    ReadFileOp op;
-    msg.GetContent(op);
-    cout << msg.sender() << " requested read with args: " << op.file_name <<
-            endl;
+//  try {
+//    ReadFileOp op;
+//    msg.GetContent(op);
+//    cout << msg.sender() << " requested read with args: " << op.file_name <<
+//            endl;
 
-    vector<string> slaves;
-    if (!gFileMap.LockFile(op.file_name, slaves)) {
-      cout << "Read Failed: File entry doe not exists." << endl;
-      return;
-    }
-    cout << "Do the read." << endl;
-    gFileMap.UnlockFile(op.file_name);
-    cout << "Read Succeeded." << endl;
-  } catch (...) {
-    cout << "Invalid read request from " << msg.sender() << endl;
-  }
+//    vector<string> slaves;
+//    if (!gFileMap.LockFile(op.file_name, slaves)) {
+//      cout << "Read Failed: File entry doe not exists." << endl;
+//      return;
+//    }
+//    cout << "Do the read." << endl;
+//    gFileMap.UnlockFile(op.file_name);
+//    cout << "Read Succeeded." << endl;
+//  } catch (...) {
+//    cout << "Invalid read request from " << msg.sender() << endl;
+//  }
 }
 
 void HandleWrite(const Message &msg, Connection &con) {
-  try {
-    WriteFileOp op;
-    msg.GetContent(op);
-    cout << msg.sender() << " requested write with args: " << op.file_name <<
-            " and " << op.data << endl;
+//  try {
+//    WriteFileOp op;
+//    msg.GetContent(op);
+//    cout << msg.sender() << " requested write with args: " << op.file_name <<
+//            " and " << op.data << endl;
 
-    vector<string> slaves;
-    if (!gFileMap.LockFile(op.file_name, slaves)) {
-      cout << "Write Failed: File entry doe not exists." << endl;
-      return;
-    }
-    cout << "Writing the data: " << op.data << endl;
-    gFileMap.UnlockFile(op.file_name);
-    cout << "Write Succeeded." << endl;
-   } catch (...) {
-    cout << "Invalid write request from " << msg.sender() << endl;
-  }
+//    vector<string> slaves;
+//    if (!gFileMap.LockFile(op.file_name, slaves)) {
+//      cout << "Write Failed: File entry doe not exists." << endl;
+//      return;
+//    }
+//    cout << "Writing the data: " << op.data << endl;
+//    gFileMap.UnlockFile(op.file_name);
+//    cout << "Write Succeeded." << endl;
+//   } catch (...) {
+//    cout << "Invalid write request from " << msg.sender() << endl;
+//  }
 }
 
 void ManageSlaves(const bool &quit) {

@@ -12,6 +12,8 @@ enum : uint16_t {
   kFileRemove,
   kFileRead,
   kFileWrite,
+  kFileOpSuccess,
+  kFileOpFail
 };
 
 struct CreateFileOp {
