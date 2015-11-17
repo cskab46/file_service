@@ -15,6 +15,8 @@ using namespace chrono;
 #include "utils/client_ops.h"
 #include "utils/file_lock_map.h"
 
+const string kServerPrefix = "SERVER";
+
 static FileLockMap gFileMap;
 
 static ordered_lock  gSlavesLock;
@@ -26,7 +28,7 @@ void HandleRemove(const Message &msg, Connection &con);
 void HandleRead(const Message &msg, Connection &con);
 void HandleWrite(const Message &msg, Connection &con);
 
-void ManageSlaves(const bool &quit);
+void ManageSlaves(const bool &quit, const string &id);
 
 
 void HandleOperations(const Message &msg) {
@@ -69,7 +71,7 @@ void Proxy(const bool &lead, const bool &quit) {
     return;
   }
 
-  thread slaves_thread(ManageSlaves, ref(quit));
+  thread slaves_thread(ManageSlaves, ref(quit), con.identifier());
   slaves_thread.detach();
 
   while (!quit) {
@@ -95,6 +97,8 @@ void Proxy(const bool &lead, const bool &quit) {
 
 void HandleCreate(const Message &msg, Connection &con) {
   FileEntry *entry = NULL;
+  bool succeeded = false;
+  CreateFileOp op;
   try {
     bool err;
     auto con = Connection::Connect(err);
@@ -103,7 +107,6 @@ void HandleCreate(const Message &msg, Connection &con) {
       return;
     }
 
-    CreateFileOp op;
     msg.GetContent(op);
     cout << msg.sender() << " requested createop with args: " << op.file_name <<
             " and " << op.redundancy << endl;
@@ -111,18 +114,22 @@ void HandleCreate(const Message &msg, Connection &con) {
       cout << "Create request failed. File already exists." << endl;
       return;
     }
-    if (!gFileMap.CreateAndLockFile(op.file_name, &entry)) {
-      cout << "Failed to create entry. File was created in the meantime." << endl;
-      return;
-    }
-
     gSlavesLock.lock();
     vector<string> tmp_slv;
-    transform(begin(gSlaves), end(gSlaves), begin(tmp_slv), [](const pair<string,vector<string>> &a) {return a.first;});
+    for (auto &entry : gSlaves) {
+      tmp_slv.push_back(entry.first);
+      cout << "slave: " << entry.first << endl;
+    }
+//    transform(begin(gSlaves), end(gSlaves), back_inserter(tmp_slv), [](const pair<string,vector<string>> &a) {return a.first;});
     gSlavesLock.unlock();
     if (op.redundancy > tmp_slv.size()) {
       cout << "Requested redundancy cannot be met. Available: " << tmp_slv.size() << endl;
-      goto release_file;
+      return;
+    }
+
+    if (!gFileMap.CreateAndLockFile(op.file_name, &entry)) {
+      cout << "Failed to create entry. File was created in the meantime." << endl;
+      return;
     }
 
     vector<string> slaves(begin(tmp_slv), begin(tmp_slv) + op.redundancy);
@@ -154,6 +161,7 @@ void HandleCreate(const Message &msg, Connection &con) {
     // Slaves are not responding to prepare op
     if (!confirmed) {
       cout << "Storage slaves are not responding." << endl;
+      gFileMap.DestroyFile(op.file_name);
       goto release_file;
     }
 
@@ -176,7 +184,6 @@ void HandleCreate(const Message &msg, Connection &con) {
         msg.GetContent(cop);
         confirmed = cop.client == client && cop.file_name == op.file_name;
         op_handler = msg.sender();
-        break;
       }
     }
 
@@ -184,7 +191,7 @@ void HandleCreate(const Message &msg, Connection &con) {
     if (!confirmed) {
       cout << "Storage slaves did not confirm operation." << endl;
       Message client_fail(kClientFailOp, SAFE_MESS);
-      client_fail.SetContent(ClientOp{op.file_name, slaves.front()});
+//      client_fail.SetContent(ClientOp{op.file_name, slaves.front()});
       if (!con.SendMessage(client_fail, client)) {
         cout << "Failed to inform client of failure." << endl;
       }
@@ -201,12 +208,14 @@ void HandleCreate(const Message &msg, Connection &con) {
 
     cout << "File '" << op.file_name << "' created. Main slave '"
          << slaves.front() << "'. Redundancy " << slaves.size() << endl;
+    succeeded = true;
   } catch (...) {
     cout << "Invalid create request from " << msg.sender() << endl;
   }
 release_file:
   if (NULL != entry) {
     entry->lock.unlock();
+    if (!succeeded) gFileMap.DestroyFile(op.file_name);
   }
 }
 
@@ -266,15 +275,18 @@ void HandleWrite(const Message &msg, Connection &con) {
 //  }
 }
 
-void ManageSlaves(const bool &quit) {
+void ManageSlaves(const bool &quit, const string &id) {
   bool err;
-  auto con = Connection::Connect(err, true);
+  auto name = kServerPrefix + to_string(stoi(id.substr(2)));
+  auto con = Connection::Connect(name, err, true);
   if (err) {
     cout << "Failed to connect with spread daemon." << endl;
   }
   if (!con.JoinGroup(kSlavesGroup)) {
     cout << "Failed to join group: " << kSlavesGroup << endl;
     return;
+  } else {
+    cout << "Id: " << con.identifier() << endl;
   }
 
   while (!quit) {
@@ -286,7 +298,9 @@ void ManageSlaves(const bool &quit) {
       continue;
     }
     auto slaves = msg.group();
-    slaves.erase(remove(begin(slaves), end(slaves), con.identifier()));
+    slaves.erase(remove_if(begin(slaves), end(slaves), [] (const string &slave){
+      return slave.find(kServerPrefix) != string::npos;
+    }), end(slaves));
 
     gSlavesLock.lock();
     // remove dead ones
@@ -302,7 +316,9 @@ void ManageSlaves(const bool &quit) {
                      [slave] (const pair<string, vector<string>> &entry) {
         return entry.first == slave; }) == end(gSlaves);
     });
-    transform(begin(new_ones), end(new_ones), end(gSlaves), [](const string &a) {return make_pair(a, vector<string>());});
+    for (auto &new_slave : new_ones)
+      gSlaves.push_back(make_pair(new_slave, vector<string>()));
+//    transform(begin(new_ones), end(new_ones), back_inserter(gSlaves), [](const string &a) {return make_pair(a, vector<string>());});
     sort(begin(gSlaves), end(gSlaves),
          [] (const pair<string, vector<string>> &a,
          const pair<string, vector<string>> &b) {

@@ -12,11 +12,6 @@
 
 using namespace std;
 
-//void HandleFileOpCreate(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, const size_t size);
-//void HandleFileOpRemove(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size);
-//void HandleFileOpRead(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size);
-//void HandleFileOpWrite(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, size_t size);
-
 void FileService(const bool &quit);
 
 //void HandleFileOpCreate(mailbox &mbox, const char sender[MAX_GROUP_NAME], const char *msg, const size_t size) {
@@ -94,6 +89,7 @@ const int kHandleOpTimeout = 3000;
 void HandleOperation(const Message &msg) {
   if (kSlavePrepareOp != msg.type()) {
     cout << "Invalid operation to handle. Type: " << msg.type() << endl;
+    return;
   }
   try {
     bool err;
@@ -104,6 +100,7 @@ void HandleOperation(const Message &msg) {
     SlaveOp op;
     msg.GetContent(op);
     op.handler = con.identifier();
+    cout << "handler: " << op.handler << endl;
     Message response(kSlaveConfirmOp, SAFE_MESS);
     response.SetContent(op);
     if (!con.SendMessage(response, msg.sender())) {
@@ -122,9 +119,15 @@ void HandleOperation(const Message &msg) {
       requested = true;
       break;
     }
+    if (!requested) {
+      cout << "Client request did not arrive. Handler will be terminated." << endl;
+      return;
+    }
+    bool slaves_failed = false;
     for (auto &slave : op.slaves) {
       if (!con.SendMessage(req, slave)) {
         cout << "Failed to request the operation to slave: " << slave << endl;
+        slaves_failed = true;
         break;
       }
       // Waiting for slave confirmation
@@ -140,11 +143,14 @@ void HandleOperation(const Message &msg) {
           break;
         }
       }
-      // TODO: handle revert.
       if (!confirmed) {
-        cout << "Could not finish the operation." << endl;
-        return;
+        slaves_failed = true;
+        break;
+        // TODO: handle revert.
       }
+    }
+    if (slaves_failed) {
+      cout << "Some of the slaves failed. This should not happen." << endl;
     }
 
     if (!con.SendMessage(response, msg.sender())) {
@@ -195,22 +201,3 @@ void FileService(const bool &quit) {
     }
   }
 }
-//    cout << msg_type << endl;
-//    switch(msg_type) {
-//    case kFileCreate:
-//      HandleFileOpCreate(mbox, sender, msg.data(), ret);
-//      break;
-//    case kFileRemove:
-//      HandleFileOpRemove(mbox, sender, msg.data(), ret);
-//      break;
-//    case kFileRead:
-//      HandleFileOpRead(mbox, sender, msg.data(), ret);
-//      break;
-//    case kFileWrite:
-//      HandleFileOpWrite(mbox, sender, msg.data(), ret);
-//      break;
-//    default:
-//      cout << "Spurious message received." << endl;
-//      break;
-//    }
-//}
