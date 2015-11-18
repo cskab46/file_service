@@ -2,23 +2,9 @@
 
 bool FileLockMap::HasFile(const string &file) {
   lock_.lock();
-  bool has = 0 != lock_map_.count(file);
+  bool has = lock_map_.count(file);
   lock_.unlock();
   return has;
-}
-
-bool FileLockMap::CreateAndLockFile(const string &file, FileEntry **entry) {
-  lock_.lock();
-  if (lock_map_.count(file)) {
-    lock_.unlock();
-    *entry = NULL;
-    return false;
-  }
-  auto &fl = lock_map_[file];
-  lock_.unlock();
-  fl.lock.lock();
-  *entry = &fl;
-  return true;
 }
 
 bool FileLockMap::DestroyFile(const string &file) {
@@ -32,16 +18,18 @@ bool FileLockMap::DestroyFile(const string &file) {
   return true;
 }
 
-bool FileLockMap::GetAndLockFile(const string &file, FileEntry **entry) {
+bool FileLockMap::LockFile(const string &file) {
   lock_.lock();
-  if (0 == lock_map_.count(file)) {
-    lock_.unlock();
-    *entry = NULL;
-    return false;
-  }
   auto &fl = lock_map_[file];
   lock_.unlock();
   fl.lock.lock();
-  *entry = &fl;
+  return true;
+}
+
+bool FileLockMap::UnlockFile(const string &file) {
+  lock_.lock();
+  auto &fl = lock_map_[file];
+  lock_.unlock();
+  fl.lock.unlock();
   return true;
 }

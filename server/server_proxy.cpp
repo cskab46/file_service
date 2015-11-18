@@ -81,6 +81,7 @@ void Proxy(const bool &lead, const bool &quit) {
     if (msg.IsMembership()) {
       if (lead) {
         //todo: send state to newcomer
+
       }
       continue;
     }
@@ -96,17 +97,9 @@ void Proxy(const bool &lead, const bool &quit) {
 }
 
 void HandleCreate(const Message &msg, Connection &con) {
-  FileEntry *entry = NULL;
   bool succeeded = false;
   CreateFileOp op;
   try {
-    bool err;
-    auto con = Connection::Connect(err);
-    if (err) {
-      cout << "Failed to connect with spread daemon." << endl;
-      return;
-    }
-
     msg.GetContent(op);
     cout << msg.sender() << " requested createop with args: " << op.file_name <<
             " and " << op.redundancy << endl;
@@ -115,26 +108,23 @@ void HandleCreate(const Message &msg, Connection &con) {
       return;
     }
     gSlavesLock.lock();
-    vector<string> tmp_slv;
+    vector<string> slaves;
     for (auto &entry : gSlaves) {
-      tmp_slv.push_back(entry.first);
-      cout << "slave: " << entry.first << endl;
+      slaves.push_back(entry.first);
+      if (slaves.size() == op.redundancy) break;
     }
-//    transform(begin(gSlaves), end(gSlaves), back_inserter(tmp_slv), [](const pair<string,vector<string>> &a) {return a.first;});
     gSlavesLock.unlock();
-    if (op.redundancy > tmp_slv.size()) {
-      cout << "Requested redundancy cannot be met. Available: " << tmp_slv.size() << endl;
+    if (op.redundancy > slaves.size()) {
+      cout << "Requested redundancy cannot be met. Available: " << slaves.size() << endl;
       return;
     }
 
-    if (!gFileMap.CreateAndLockFile(op.file_name, &entry)) {
+    if (!gFileMap.LockFile(op.file_name)) {
       cout << "Failed to create entry. File was created in the meantime." << endl;
       return;
     }
 
-    vector<string> slaves(begin(tmp_slv), begin(tmp_slv) + op.redundancy);
     auto client = msg.sender();
-    
     // Send message to master slave(first) to prepare for client operation
     Message slave_prep(kSlavePrepareOp, SAFE_MESS);
     slave_prep.SetContent(SlaveOp{op.file_name, client, "", slaves});
@@ -201,7 +191,17 @@ void HandleCreate(const Message &msg, Connection &con) {
       goto release_file;
     }
 
-    entry->slaves = slaves;
+    gSlavesLock.lock();
+    for (auto & slave : slaves) {
+      for (auto & slave_entry : gSlaves) {
+        if (slave == slave_entry.first) {
+          //TODO: maybe handle missing slaves?
+          slave_entry.second.push_back(op.file_name);
+          break;
+        }
+      }
+    }
+    gSlavesLock.unlock();
 
     Message client_confirm(kClientConfirmOp, SAFE_MESS);
     client_confirm.SetContent(ClientOp{op.file_name, slaves.front()});
@@ -216,10 +216,8 @@ void HandleCreate(const Message &msg, Connection &con) {
     cout << "Invalid create request from " << msg.sender() << endl;
   }
 release_file:
-  if (NULL != entry) {
-    entry->lock.unlock();
+    gFileMap.UnlockFile(op.file_name);
     if (!succeeded) gFileMap.DestroyFile(op.file_name);
-  }
 }
 
 void HandleRemove(const Message &msg, Connection &con) {

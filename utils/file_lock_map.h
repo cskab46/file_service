@@ -19,7 +19,8 @@ class FileLockMap {
 public:
   bool HasFile(const string &file);
   bool CreateAndLockFile(const string &file, FileEntry **entry);
-  bool GetAndLockFile(const string &file, FileEntry **entry);
+  bool LockFile(const string &file);
+  bool UnlockFile(const string &file);
   bool DestroyFile(const string &file);
 
   friend class boost::serialization::access;
