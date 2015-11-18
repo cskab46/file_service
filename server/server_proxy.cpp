@@ -153,9 +153,12 @@ void HandleCreate(const Message &msg, Connection &con) {
       if (msg.type() == kSlaveConfirmOp) {
         SlaveOp cop;
         msg.GetContent(cop);
-        confirmed = cop.client == client && cop.file_name == op.file_name;
+        confirmed = (cop.client == client && cop.file_name == op.file_name);
+        cout << "confirmed: " << confirmed << endl;
         op_handler = msg.sender();
         break;
+      } else {
+        cout << "Message type: " << msg.type() << endl;
       }
     }
     // Slaves are not responding to prepare op
@@ -202,7 +205,7 @@ void HandleCreate(const Message &msg, Connection &con) {
 
     Message client_confirm(kClientConfirmOp, SAFE_MESS);
     client_confirm.SetContent(ClientOp{op.file_name, slaves.front()});
-    if (!con.SendMessage(client_confirm, slaves.front())) {
+    if (!con.SendMessage(client_confirm, client)) {
       cout << "Failed to inform client of file creation." << endl;
     }
 

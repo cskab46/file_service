@@ -1,16 +1,11 @@
-#include <cstdint>
 #include <boost/serialization/string.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/access.hpp>
 
+#include "utils/ops.h"
+
 using namespace std;
 
-
-enum : uint16_t {
-  kSlavePrepareOp = 2,
-  kSlaveConfirmOp,
-  kSlaveFailOp,
-};
 
 struct SlaveOp {
   string file_name;

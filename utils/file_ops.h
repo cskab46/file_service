@@ -1,20 +1,11 @@
-#include <cstdint>
 #include <string>
 #include <boost/serialization/access.hpp>
+#include "utils/ops.h"
 
 const int kCreateTimeout = 2000;
 const int kRemoveTimeout = 2000;
 const int kReadTimeout = 2000;
 const int kWriteTimeout = 2000;
-
-enum : uint16_t {
-  kFileCreate = 2,
-  kFileRemove,
-  kFileRead,
-  kFileWrite,
-  kFileOpSuccess,
-  kFileOpFail
-};
 
 struct CreateFileOp {
   std::string file_name;

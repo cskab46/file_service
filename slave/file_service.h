@@ -99,10 +99,8 @@ void HandleOperation(const Message &msg) {
     }
     SlaveOp op;
     msg.GetContent(op);
-    op.handler = con.identifier();
-    cout << "handler: " << op.handler << endl;
     Message response(kSlaveConfirmOp, SAFE_MESS);
-    response.SetContent(op);
+    response.SetContent(SlaveOp{op.file_name, op.client, con.identifier(), vector<string>()});
     if (!con.SendMessage(response, msg.sender())) {
       cout << "Failed to confirm. Aborting the send." << endl;
       return;
@@ -151,6 +149,7 @@ void HandleOperation(const Message &msg) {
     }
     if (slaves_failed) {
       cout << "Some of the slaves failed. This should not happen." << endl;
+      return;
     }
 
     if (!con.SendMessage(response, msg.sender())) {
@@ -182,7 +181,7 @@ void FileService(const bool &quit) {
     auto msg = con.GetMessage();
 
     if (msg.type() == kSlavePrepareOp) {
-      thread t(HandleOperation, ref(msg));
+      thread t(HandleOperation, msg);
       t.detach();
       continue;
     }
@@ -196,7 +195,7 @@ void FileService(const bool &quit) {
       continue;
     }
     Message response(handled ? kFileOpSuccess : kFileOpFail, SAFE_MESS);
-    if (con.SendMessage(response, msg.sender())) {
+    if (!con.SendMessage(response, msg.sender())) {
       cout << "Could not confirm FileOp." << endl;
     }
   }

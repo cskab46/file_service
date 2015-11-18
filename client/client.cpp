@@ -69,7 +69,6 @@ int main(int argc, char **argv) {
     return 1;
   }
   HandleCreateOp(con, "teste.txt", 4);
-  system("pause");
 //  {
 //    Message m(kFileRemove, SAFE_MESS);
 //    RemoveFileOp op {"teste.txt"};
