@@ -13,6 +13,7 @@ using namespace chrono;
 #include "utils/file_ops.h"
 #include "utils/slave_ops.h"
 #include "utils/client_ops.h"
+#include "utils/server_ops.h"
 #include "utils/file_lock_map.h"
 
 const string kServerPrefix = "SERVER";
@@ -23,36 +24,46 @@ static ordered_lock  gSlavesLock;
 static vector<pair<string, vector<string>>> gSlaves; // slaves -> files mapping
 
 
-void HandleCreate(const Message &msg, Connection &con);
-void HandleRemove(const Message &msg, Connection &con);
-void HandleRead(const Message &msg, Connection &con);
-void HandleWrite(const Message &msg, Connection &con);
+bool HandleCreate(const Message &msg, Connection &con);
+bool HandleRemove(const Message &msg, Connection &con);
+bool HandleRead(const Message &msg, Connection &con);
+bool HandleWrite(const Message &msg, Connection &con);
 
 void ManageSlaves(const bool &quit, const string &id);
 
 
-void HandleOperations(const Message &msg) {
+void HandleOperations(const Message &msg, const vector<string> &servers) {
   bool err;
   auto con = Connection::Connect(err);
   if (err) {
     cout << "Failed to connect with spread daemon." << endl;
   }
-  cout << "Message type: " << msg.type() << endl;
+  bool succeeded = false;
   switch (msg.type()) {
   case kFileCreate:
-    HandleCreate(msg, con);
+    succeeded = HandleCreate(msg, con);
     break;
   case kFileRemove:
-    HandleRemove(msg, con);
+    succeeded = HandleRemove(msg, con);
     break;
   case kFileRead:
-    HandleRead(msg, con);
+    succeeded = HandleRead(msg, con);
     break;
   case kFileWrite:
-    HandleWrite(msg, con);
+    succeeded = HandleWrite(msg, con);
     break;
   default:
     cout << "Spurious file operation requested." << endl;
+  }
+  if (succeeded) {
+    Message state(kServerStateOp, SAFE_MESS);
+    gSlavesLock.lock();
+    auto slaves = gSlaves;
+    gSlavesLock.unlock();
+    state.SetContent(ServerOp{gFileMap, slaves});
+    for (auto &server : msg.group()) {
+        con.SendMessage(state, server);
+    }
   }
 }
 
@@ -73,30 +84,44 @@ void Proxy(const bool &lead, const bool &quit) {
 
   thread slaves_thread(ManageSlaves, ref(quit), con.identifier());
   slaves_thread.detach();
-
+  vector<string> servers;
   while (!quit) {
     if (!con.HasMessage()) continue;
     auto msg = con.GetMessage();
 
     if (msg.IsMembership()) {
+      servers = msg.group();
+      servers.erase(find(begin(servers), end(servers), con.identifier()));
       if (lead) {
         //todo: send state to newcomer
-
+        Message state(kServerStateOp, SAFE_MESS);
+        state.SetContent(ServerOp{gFileMap, gSlaves});
+        for (auto &server : msg.group()) {
+          if (server != con.identifier()) {
+            con.SendMessage(state, server);
+          }
+        }
       }
       continue;
     }
-
     if (lead) {
       cout << "Request: " << msg.type() << endl;
-      thread t(HandleOperations, msg);
+      thread t(HandleOperations, msg, servers);
       t.detach();
+    } else if (msg.type() == kServerStateOp){
+      ServerOp op;
+      msg.GetContent(op);
+      gFileMap = op.file_map;
+      gSlavesLock.lock();
+      gSlaves = op.slaves;
+      gSlavesLock.unlock();
     } else {
-      // Just update the state
+      cout << "Spurious request sent to server." << endl;
     }
   }
 }
 
-void HandleCreate(const Message &msg, Connection &con) {
+bool HandleCreate(const Message &msg, Connection &con) {
   bool succeeded = false;
   CreateFileOp op;
   try {
@@ -105,7 +130,7 @@ void HandleCreate(const Message &msg, Connection &con) {
             " and " << op.redundancy << endl;
     if (gFileMap.HasFile(op.file_name)) {
       cout << "Create request failed. File already exists." << endl;
-      return;
+      return false;
     }
     gSlavesLock.lock();
     vector<string> slaves;
@@ -116,12 +141,12 @@ void HandleCreate(const Message &msg, Connection &con) {
     gSlavesLock.unlock();
     if (op.redundancy > slaves.size()) {
       cout << "Requested redundancy cannot be met. Available: " << slaves.size() << endl;
-      return;
+      return false;
     }
 
     if (!gFileMap.LockFile(op.file_name)) {
       cout << "Failed to create entry. File was created in the meantime." << endl;
-      return;
+      return false;
     }
 
     auto client = msg.sender();
@@ -218,9 +243,10 @@ void HandleCreate(const Message &msg, Connection &con) {
 release_file:
     gFileMap.UnlockFile(op.file_name);
     if (!succeeded) gFileMap.DestroyFile(op.file_name);
+    return succeeded;
 }
 
-void HandleRemove(const Message &msg, Connection &con) {
+bool HandleRemove(const Message &msg, Connection &con) {
   try {
     RemoveFileOp op;
     msg.GetContent(op);
@@ -228,15 +254,17 @@ void HandleRemove(const Message &msg, Connection &con) {
             endl;
     if (!gFileMap.DestroyFile(op.file_name)) {
       cout << "Remove Failed: File entry does not exists." << endl;
-      return;
+      return false;
     }
     cout << "Remove Succeeded." << endl;
+    return true;
   } catch (...) {
     cout << "Invalid remove request from " << msg.sender() << endl;
   }
+  return false;
 }
 
-void HandleRead(const Message &msg, Connection &con) {
+bool HandleRead(const Message &msg, Connection &con) {
 //  try {
 //    ReadFileOp op;
 //    msg.GetContent(op);
@@ -254,9 +282,10 @@ void HandleRead(const Message &msg, Connection &con) {
 //  } catch (...) {
 //    cout << "Invalid read request from " << msg.sender() << endl;
 //  }
+  return false;
 }
 
-void HandleWrite(const Message &msg, Connection &con) {
+bool HandleWrite(const Message &msg, Connection &con) {
 //  try {
 //    WriteFileOp op;
 //    msg.GetContent(op);
@@ -274,6 +303,7 @@ void HandleWrite(const Message &msg, Connection &con) {
 //   } catch (...) {
 //    cout << "Invalid write request from " << msg.sender() << endl;
 //  }
+  return false;
 }
 
 void ManageSlaves(const bool &quit, const string &id) {

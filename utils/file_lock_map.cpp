@@ -22,7 +22,7 @@ bool FileLockMap::LockFile(const string &file) {
   lock_.lock();
   auto &fl = lock_map_[file];
   lock_.unlock();
-  fl.lock.lock();
+  fl.lock();
   return true;
 }
 
@@ -30,6 +30,6 @@ bool FileLockMap::UnlockFile(const string &file) {
   lock_.lock();
   auto &fl = lock_map_[file];
   lock_.unlock();
-  fl.lock.unlock();
+  fl.unlock();
   return true;
 }

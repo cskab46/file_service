@@ -1,3 +1,5 @@
+#ifndef CLIENT_OPS_H
+#define CLIENT_OPS_H
 #include <boost/serialization/string.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/access.hpp>
@@ -17,3 +19,5 @@ struct ClientOp {
     ar & op.slave;
   }
 };
+
+#endif // CLIENT_OPS_H

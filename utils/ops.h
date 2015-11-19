@@ -15,5 +15,6 @@ enum : uint16_t {
   kClientPrepareOp,
   kClientConfirmOp,
   kClientFailOp,
+  kServerStateOp,
 };
 #endif // OPS_H_
