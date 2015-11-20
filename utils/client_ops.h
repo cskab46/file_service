@@ -12,6 +12,7 @@ using namespace std;
 struct ClientOp {
   string file_name;
   string slave;
+  string data;
   friend class boost::serialization::access;
   template <typename Archive>
   friend void serialize(Archive &ar, ClientOp &op, const unsigned int version) {

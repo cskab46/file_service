@@ -80,6 +80,21 @@ bool HandleFileCreate(const Message &op_msg) {
   return false;
 }
 
+bool HandleFileRemove(const Message &op_msg) {
+  try {
+    RemoveFileOp fop;
+    op_msg.GetContent(fop);
+    if (!RemoveFile(fop.file_name)) {
+      cout << "Failed to remove file: " << fop.file_name << endl;
+      return false;
+    }
+    return true;
+  } catch (...) {
+    cout << "Exception during HandleFileRemove." << endl;
+  }
+  return false;
+}
+
 #include <chrono>
 
 using namespace std::chrono;
@@ -152,6 +167,7 @@ void HandleOperation(const Message &msg) {
       return;
     }
 
+
     if (!con.SendMessage(response, msg.sender())) {
       cout << "Failed to confirm. Aborting the send." << endl;
       return;
@@ -186,14 +202,24 @@ void FileService(const bool &quit) {
       continue;
     }
     bool handled = false;
-    if (msg.type() == kFileCreate) {
+    switch (msg.type()) {
+    case kFileCreate:
       handled = HandleFileCreate(msg);
-    } else if (msg.type() == kFileRemove) {
-      handled = false;
-     } else {
+      break;
+    case kFileRemove:
+      handled = HandleFileRemove(msg);
+      break;
+    case kFileRead:
+//      handled = HandleFileRead(msg);
+      break;
+    case kFileWrite:
+//      handled = HandleFileWrite(msg);
+      break;
+    default:
       cout << "Spurious slave op requested." << endl;
       continue;
     }
+
     Message response(handled ? kFileOpSuccess : kFileOpFail, SAFE_MESS);
     if (!con.SendMessage(response, msg.sender())) {
       cout << "Could not confirm FileOp." << endl;
