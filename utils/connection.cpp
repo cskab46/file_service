@@ -1,5 +1,8 @@
 #include "connection.h"
 
+#include <chrono>
+using namespace std::chrono;
+
 const int kConnectTimeout = 5;
 const int kMaxGroupsPerMsg = 32;
 
@@ -67,6 +70,20 @@ retry:
   msg.set_group(tmp);
   msg.set_sender(sender);
   return msg;
+}
+
+bool Connection::GetMessage(int16_t type, unsigned int timeout, Message &msg) {
+  auto start = steady_clock::now();
+  bool got = false;
+  while (!got && duration_cast<milliseconds>(steady_clock::now() - start).count()
+         < timeout) {
+    if (!HasMessage()) continue;
+    auto tmp = GetMessage();
+    if (got = (tmp.type() == type)) {
+      msg = tmp;
+    }
+  }
+  return got;
 }
 
 bool Connection::SendMessage(const Message &msg, const string &to) {

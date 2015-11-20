@@ -22,6 +22,7 @@ public:
   bool JoinGroup(const string &group);
   bool HasMessage();
   const Message GetMessage();
+  bool GetMessage(int16_t type, unsigned int timeout, Message &msg);
   bool SendMessage(const Message &msg, const string &to);
 
 private:

@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <thread>
+#include <set>
 
 using namespace std;
 using namespace chrono;
@@ -124,6 +125,7 @@ void Proxy(const bool &lead, const bool &quit) {
 bool HandleCreate(const Message &msg, Connection &con) {
   bool succeeded = false;
   CreateFileOp op;
+  auto client = msg.sender();
   try {
     msg.GetContent(op);
     cout << msg.sender() << " requested createop with args: " << op.file_name <<
@@ -149,7 +151,6 @@ bool HandleCreate(const Message &msg, Connection &con) {
       return false;
     }
 
-    auto client = msg.sender();
     // Send message to master slave(first) to prepare for client operation
     Message slave_prep(kSlavePrepareOp, SAFE_MESS);
     slave_prep.SetContent(SlaveOp{op.file_name, client, "", slaves});
@@ -161,25 +162,17 @@ bool HandleCreate(const Message &msg, Connection &con) {
     auto start = steady_clock::now();
     bool confirmed = false;
     string op_handler;
-    while (!confirmed &&
-           duration_cast<milliseconds>(steady_clock::now() - start).count() < kCreateTimeout) {
-      if (!con.HasMessage()) continue;
-      auto msg = con.GetMessage();
-      if (msg.type() == kSlaveConfirmOp) {
-        SlaveOp cop;
-        msg.GetContent(cop);
-        confirmed = (cop.client == client && cop.file_name == op.file_name);
-        cout << "confirmed: " << confirmed << endl;
-        op_handler = msg.sender();
-        break;
-      } else {
-        cout << "Message type: " << msg.type() << endl;
-      }
+    Message tmp(0,0);
+    if (con.GetMessage(kSlaveConfirmOp, kCreateTimeout, tmp)) {
+      SlaveOp cop;
+      tmp.GetContent(cop);
+      confirmed = cop.client == client && cop.file_name == op.file_name;
+      op_handler = tmp.sender();
     }
+
     // Slaves are not responding to prepare op
     if (!confirmed) {
-      cout << "Storage slaves are not responding." << endl;
-      gFileMap.DestroyFile(op.file_name);
+      cout << "Storage slaves did not respond." << endl;
       goto release_file;
     }
 
@@ -193,26 +186,16 @@ bool HandleCreate(const Message &msg, Connection &con) {
     // Wait slave to confirm operation and to inform the handler
     start = steady_clock::now();
     confirmed = false;
-    while (!confirmed &&
-           duration_cast<milliseconds>(steady_clock::now() - start).count() < kCreateTimeout) {
-      if (!con.HasMessage()) continue;
-      auto msg = con.GetMessage();
-      if (msg.type() == kSlaveConfirmOp) {
-        SlaveOp cop;
-        msg.GetContent(cop);
-        confirmed = cop.client == client && cop.file_name == op.file_name;
-        op_handler = msg.sender();
-      }
+    if (con.GetMessage(kSlaveConfirmOp, kCreateTimeout, tmp)) {
+      SlaveOp cop;
+      tmp.GetContent(cop);
+      confirmed = cop.client == client && cop.file_name == op.file_name;
+      op_handler = tmp.sender();
     }
 
     // Slave did not confirm
     if (!confirmed) {
       cout << "Storage slaves did not confirm operation." << endl;
-      Message client_fail(kClientFailOp, SAFE_MESS);
-//      client_fail.SetContent(ClientOp{op.file_name, slaves.front()});
-      if (!con.SendMessage(client_fail, client)) {
-        cout << "Failed to inform client of failure." << endl;
-      }
       goto release_file;
     }
 
@@ -220,7 +203,6 @@ bool HandleCreate(const Message &msg, Connection &con) {
     for (auto & slave : slaves) {
       for (auto & slave_entry : gSlaves) {
         if (slave == slave_entry.first) {
-          //TODO: maybe handle missing slaves?
           slave_entry.second.push_back(op.file_name);
           break;
         }
@@ -242,7 +224,13 @@ bool HandleCreate(const Message &msg, Connection &con) {
   }
 release_file:
     gFileMap.UnlockFile(op.file_name);
-    if (!succeeded) gFileMap.DestroyFile(op.file_name);
+    if (!succeeded) {
+      Message client_fail(kClientFailOp, SAFE_MESS);
+      if (!con.SendMessage(client_fail, client)) {
+        cout << "Failed to inform client of failure." << endl;
+      }
+      gFileMap.DestroyFile(op.file_name);
+    }
     return succeeded;
 }
 
@@ -257,7 +245,7 @@ bool HandleRemove(const Message &msg, Connection &con) {
       return false;
     }
     cout << "Remove Succeeded." << endl;
-    return true;
+    return true;    // dst is now sorted by what used to be the value in src!
   } catch (...) {
     cout << "Invalid remove request from " << msg.sender() << endl;
   }
@@ -335,10 +323,33 @@ void ManageSlaves(const bool &quit, const string &id) {
 
     gSlavesLock.lock();
     // remove dead ones
-    gSlaves.erase(std::remove_if(begin(gSlaves), end(gSlaves),
-                                 [slaves] (const pair<string, vector<string>> &entry) {
+    auto first_dead = remove_if(begin(gSlaves), end(gSlaves), [slaves] (const pair<string, vector<string>> &entry) {
       return find(begin(slaves), end(slaves), entry.first) == end(slaves);
-    }), end(gSlaves));
+    });
+    decltype(gSlaves) dead_slaves(first_dead, end(gSlaves));
+    gSlaves.erase(first_dead, end(gSlaves));
+
+    set<string> lost_replicas;
+    for (auto & slave : dead_slaves) {
+         for (auto & replica : slave.second) {
+           lost_replicas.insert(replica);
+         }
+    }
+
+    decltype(lost_replicas) lost_files;
+    for (auto & replica : lost_replicas) {
+      bool found = false;
+      for (auto & slave : gSlaves) {
+        if (find(begin(slave.second), end(slave.second), replica) != end(slave.second)) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        lost_files.insert(replica);
+      }
+    }
+
     // insert new ones
     decltype(slaves) new_ones;
     copy_if(begin(slaves), end(slaves), back_inserter(new_ones),
@@ -348,12 +359,16 @@ void ManageSlaves(const bool &quit, const string &id) {
         return entry.first == slave; }) == end(gSlaves);
     });
     for (auto &new_slave : new_ones)
-      gSlaves.push_back(make_pair(new_slave, vector<string>()));
+    gSlaves.emplace_back(new_slave, vector<string>());
 //    transform(begin(new_ones), end(new_ones), back_inserter(gSlaves), [](const string &a) {return make_pair(a, vector<string>());});
     sort(begin(gSlaves), end(gSlaves),
          [] (const pair<string, vector<string>> &a,
          const pair<string, vector<string>> &b) {
       return a.second.size() < b.second.size();});
     gSlavesLock.unlock();
+
+    for (auto &file : lost_files) {
+      gFileMap.DestroyFile(file);
+    }
   }
 }
