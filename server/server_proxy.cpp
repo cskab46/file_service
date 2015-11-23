@@ -148,7 +148,6 @@ bool PerformOp(Connection &con, string client, string file, vector<string> slave
   }
 
   // Wait slave to confirm operation and to inform the handler
-  auto start = steady_clock::now();
   bool confirmed = false;
   string op_handler;
   Message tmp(0,0);
@@ -173,18 +172,19 @@ bool PerformOp(Connection &con, string client, string file, vector<string> slave
   }
 
   // Wait slave to confirm operation and to inform the handler
-  start = steady_clock::now();
   confirmed = false;
-  if (con.GetMessage(kSlaveConfirmOp, kCreateTimeout, tmp)) {
-    SlaveOp cop;
-    tmp.GetContent(cop);
-    confirmed = cop.client == client && cop.file_name == file;
+  if (con.GetMessage(kFileOpResult, kCreateTimeout, tmp)) {
+    ResultFileOp result;
+    tmp.GetContent(result);
+    confirmed = result.ok;
   }
-
   // Slave did not confirm
   if (!confirmed) {
     cout << "Storage slaves did not confirm operation." << endl;
     return false;
+  }
+  if (!con.SendMessage(tmp, client)) {
+    cout << "Failed to inform client of operation result." << endl;
   }
 
   return true;

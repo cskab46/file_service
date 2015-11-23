@@ -65,34 +65,65 @@ void FileService(const bool &quit);
 //  SP_multicast(mbox, SAFE_MESS, sender, kFileWriteFail,	strlen(fail), fail);
 //}
 
-bool HandleFileCreate(const Message &op_msg) {
+ResultFileOp HandleFileCreate(const Message &op_msg) {
   try {
     CreateFileOp fop;
     op_msg.GetContent(fop);
     if (!CreateFile(fop.file_name)) {
       cout << "Failed to create file: " << fop.file_name << endl;
-      return false;
+      return ResultFileOp{fop.file_name, false};
     }
-    return true;
+    return ResultFileOp{fop.file_name, true};
   } catch (...) {
     cout << "Exception during HandleFileCreate." << endl;
   }
-  return false;
+  return ResultFileOp{"", false};
 }
 
-bool HandleFileRemove(const Message &op_msg) {
+ResultFileOp HandleFileRemove(const Message &op_msg) {
   try {
     RemoveFileOp fop;
     op_msg.GetContent(fop);
     if (!RemoveFile(fop.file_name)) {
       cout << "Failed to remove file: " << fop.file_name << endl;
-      return false;
+      return ResultFileOp{fop.file_name, false};
     }
-    return true;
+    return ResultFileOp{fop.file_name, true};
   } catch (...) {
     cout << "Exception during HandleFileRemove." << endl;
   }
-  return false;
+  return ResultFileOp{"", false};
+}
+
+ResultFileOp HandleFileRead(const Message &op_msg) {
+  try {
+    ReadFileOp fop;
+    op_msg.GetContent(fop);
+    string data;
+    if (!ReadFile(fop.file_name, data)) {
+      cout << "Failed to read file: " << fop.file_name << endl;
+      return ResultFileOp{fop.file_name, false};
+    }
+    return ResultFileOp{fop.file_name, true, data};
+  } catch (...) {
+    cout << "Exception during HandleFileRemove." << endl;
+  }
+  return ResultFileOp{"", false};
+}
+
+ResultFileOp HandleFileWrite(const Message &op_msg) {
+  try {
+    WriteFileOp fop;
+    op_msg.GetContent(fop);
+    if (!WriteFile(fop.file_name, fop.data)) {
+      cout << "Failed to write file: " << fop.file_name << endl;
+      return ResultFileOp{fop.file_name, false};
+    }
+    return ResultFileOp{fop.file_name, true};
+  } catch (...) {
+    cout << "Exception during HandleFileRemove." << endl;
+  }
+  return ResultFileOp{"", false};
 }
 
 #include <chrono>
@@ -137,40 +168,38 @@ void HandleOperation(const Message &msg) {
       return;
     }
     bool slaves_failed = false;
+    Message result(0,0);
     for (auto &slave : op.slaves) {
       if (!con.SendMessage(req, slave)) {
         cout << "Failed to request the operation to slave: " << slave << endl;
+        cout << "Aborting operation." << endl;
+        return;
+      }
+      if (!con.GetMessage(kFileOpResult, kHandleOpTimeout, result)) {
         slaves_failed = true;
         break;
       }
-      // Waiting for slave confirmation
-      auto start = steady_clock::now();
-      bool confirmed = false;
-      while (duration_cast<milliseconds>(steady_clock::now() - start).count() < kHandleOpTimeout) {
-        if (!con.HasMessage()) continue;
-        auto req = con.GetMessage();
-        if (req.sender() != slave) continue;
-        if (req.type() == kFileOpFail) break;
-        if (req.type() == kFileOpSuccess) {
-          confirmed = true;
-          break;
-        }
-      }
-      if (!confirmed) {
-        slaves_failed = true;
-        break;
-        // TODO: handle revert.
-      }
+      cout << "slave " << slave << " confirmed op." << endl;
+      cout << "msg: " << result.type() << endl;
+      ResultFileOp rop;
+      result.GetContent(rop);
+      cout << "msg: " << rop.file_name << endl;
+      cout << "msg: " << rop.ok << endl;
+      cout << "msg: " << rop.data << endl;
     }
     if (slaves_failed) {
       cout << "Some of the slaves failed. This should not happen." << endl;
-      return;
-    }
-
-
-    if (!con.SendMessage(response, msg.sender())) {
-      cout << "Failed to confirm. Aborting the send." << endl;
-      return;
+      ResultFileOp res{op.file_name, false};
+      result.SetContent(res);
+      if (!con.SendMessage(result, op.client) ||
+          !con.SendMessage(result, msg.sender())) {
+        cout << "Failed to inform client and server of slaves failure." << endl;
+      }
+    } else {
+      if (!con.SendMessage(result, op.client) ||
+          !con.SendMessage(result, msg.sender())) {
+        cout << "Failed to inform client and server of operation result." << endl;
+      }
     }
   } catch(...) {
     cout << "Exception thrown while handling operation." << endl;
@@ -201,26 +230,27 @@ void FileService(const bool &quit) {
       t.detach();
       continue;
     }
-    bool handled = false;
+    ResultFileOp result = {"", false};
     switch (msg.type()) {
     case kFileCreate:
-      handled = HandleFileCreate(msg);
+      result = HandleFileCreate(msg);
       break;
     case kFileRemove:
-      handled = HandleFileRemove(msg);
+      result = HandleFileRemove(msg);
       break;
     case kFileRead:
-//      handled = HandleFileRead(msg);
+      result = HandleFileRead(msg);
       break;
     case kFileWrite:
-//      handled = HandleFileWrite(msg);
+      result = HandleFileWrite(msg);
       break;
     default:
       cout << "Spurious slave op requested." << endl;
       continue;
     }
 
-    Message response(handled ? kFileOpSuccess : kFileOpFail, SAFE_MESS);
+    Message response(kFileOpResult, SAFE_MESS);
+    response.SetContent(result);
     if (!con.SendMessage(response, msg.sender())) {
       cout << "Could not confirm FileOp." << endl;
     }

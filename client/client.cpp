@@ -11,10 +11,12 @@
 using namespace std;
 using namespace std::chrono;
 
-void HandleOp(Connection &con, Message msg) {
+const int kHandleOpTimeout = 3000;
+
+bool HandleOp(Connection &con, Message msg, ResultFileOp &result) {
   if (!con.SendMessage(msg, kProxyGroup)) {
     cout << "Failed sending file request to server." << endl;
-    return;
+    return false;
   }
   auto start = steady_clock::now();
   bool response = false;
@@ -32,33 +34,42 @@ void HandleOp(Connection &con, Message msg) {
   }
   if (!response) {
     cout << "Server did not respond to request." << endl;
-    return;
+    return false;
   }
   if (!con.SendMessage(msg, prepare.slave)) {
     cout << "Failed sending request to slave." << endl;
-    return;
+    return false;
+  }
+  // Wait for slave response
+  Message slave_response(0,0);
+  if (!con.GetMessage(kFileOpResult, kHandleOpTimeout, slave_response)) {
+    cout << "Slave did not respond to request." << endl;
+    return false;
+  }
+  // Wait for server response
+  Message server_response(0,0);
+  if (!con.GetMessage(kFileOpResult, kHandleOpTimeout, server_response)) {
+    cout << "Server did not respond to request." << endl;
+    return false;
+  }
+  ResultFileOp slave_result, server_result;
+  try {
+    slave_response.GetContent(slave_result);
+    server_response.GetContent(server_result);
+  } catch (...) {
+    cout << "Failed to get result information from messages." << endl;
+    return false;
   }
 
-  start = steady_clock::now();
-  response = false;
-  bool succeeded = false;
-  while (!response &&
-         duration_cast<milliseconds>(steady_clock::now() - start).count() < kCreateTimeout) {
-    if (!con.HasMessage()) continue;
-    auto msg = con.GetMessage();
-    if (response = ((msg.type() == kClientConfirmOp || msg.type() == kClientFailOp))) {
-       succeeded = msg.type() == kClientConfirmOp;
-    }
-  }
-  if (!response) {
-    cout << "Server did not confirm request." << endl;
-    return;
-  }
-  if (succeeded) {
+
+  if (slave_result.ok && server_result.ok) {
+    result = slave_result;
     cout << "Operation done." << endl;
-  } else {
-    cout << "Operation failed." << endl;
+    return true;
   }
+
+  cout << "Operation failed." << endl;
+  return false;
 }
 
 void HandleCreateOp(Connection &con, const string &filename,
@@ -66,30 +77,34 @@ void HandleCreateOp(Connection &con, const string &filename,
   Message create_msg(kFileCreate, SAFE_MESS);
   CreateFileOp op {filename, redundancy};
   create_msg.SetContent(op);
-  HandleOp(con, create_msg);
+  ResultFileOp result;
+  HandleOp(con, create_msg, result);
 }
 
 void HandleRemoveOp(Connection &con, const string &filename) {
   Message remove_msg(kFileRemove, SAFE_MESS);
   RemoveFileOp op {filename};
   remove_msg.SetContent(op);
-  HandleOp(con, remove_msg);
+  ResultFileOp result;
+  HandleOp(con, remove_msg, result);
 }
 
 void HandleReadOp(Connection &con, const string &filename) {
   Message read_msg(kFileRead, SAFE_MESS);
   ReadFileOp op {filename};
   read_msg.SetContent(op);
-  HandleOp(con, read_msg);
-  read_msg.GetContent(op);
-  cout << "Data dead: " << op.data << endl;
+  ResultFileOp result;
+  if (HandleOp(con, read_msg, result)) {
+    cout << "Data dead: " << result.data << endl;
+  }
 }
 
 void HandleWriteOp(Connection &con, const string &filename, const string & data) {
   Message write_msg(kFileWrite, SAFE_MESS);
   WriteFileOp op {filename, data};
   write_msg.SetContent(op);
-  HandleOp(con, write_msg);
+  ResultFileOp result;
+  HandleOp(con, write_msg, result);
 }
 
 int main(int argc, char **argv) {
@@ -105,7 +120,7 @@ int main(int argc, char **argv) {
     HandleRemoveOp(con, argv[2]);
   } else if (string(argv[1]) == "read" && argc == 3) {
     HandleReadOp(con, argv[2]);
-  } else if (string(argv[1]) == "write" && argc == 3) {
+  } else if (string(argv[1]) == "write" && argc == 4) {
     HandleWriteOp(con, argv[2], argv[3]);
   } else {
     return 2;

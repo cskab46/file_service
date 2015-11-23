@@ -9,6 +9,7 @@ enum : uint16_t {
   kFileWrite,
   kFileOpSuccess,
   kFileOpFail,
+  kFileOpResult,
   kSlavePrepareOp,
   kSlaveConfirmOp,
   kSlaveFailOp,

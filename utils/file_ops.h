@@ -29,7 +29,6 @@ struct RemoveFileOp {
 
 struct ReadFileOp {
   std::string file_name;
-  std::string data;
   friend struct boost::serialization::access;
   template <typename Archive>
   friend void serialize(Archive &ar, ReadFileOp &op, const unsigned int version) {
@@ -44,6 +43,19 @@ struct WriteFileOp {
   template <typename Archive>
   friend void serialize(Archive &ar, WriteFileOp &op, const unsigned int version) {
     ar & op.file_name;
+    ar & op.data;
+  }
+};
+
+struct ResultFileOp {
+  std::string file_name;
+  bool ok;
+  std::string data;
+  friend struct boost::serialization::access;
+  template <typename Archive>
+  friend void serialize(Archive &ar, ResultFileOp &op, const unsigned int version) {
+    ar & op.file_name;
+    ar & op.ok;
     ar & op.data;
   }
 };
