@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file>resources/file_hover.png</file>
+        <file>resources/file_normal.png</file>
+        <file>resources/file_select.png</file>
+    </qresource>
+</RCC>
