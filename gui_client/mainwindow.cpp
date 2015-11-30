@@ -39,7 +39,7 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event) {
 }
 
 void MainWindow::NewDocument() {
-  ui->centralwidget->layout()->addWidget(new FileEntry);
+  ui->centralwidget->layout()->addWidget(new FileEntry("Teste.txt", connection_));
 }
 
 void MainWindow::SetStatusMessage(QString &message) {
