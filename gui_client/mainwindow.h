@@ -2,12 +2,16 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QMap>
+
+#include "utils/connection.h"
 
 namespace Ui {
 class MainWindow;
 }
 
-#include "utils/connection.h"
+class FileEntry;
+
 
 class MainWindow : public QMainWindow
 {
@@ -19,13 +23,17 @@ public:
   void contextMenuEvent(QContextMenuEvent *event);
 
 public slots:
-  void NewDocument();
+  void NewFile();
   void SetStatusMessage(QString &message);
+
+  void CreateFile(QString file_name, unsigned int redundancy);
+  void RemoveFile(QString file_name);
 
 private:
   Ui::MainWindow *ui;
   bool connection_error_;
   Connection connection_;
+  QMap<QString, FileEntry*> file_entries_;
 };
 
 #endif // MAINWINDOW_H

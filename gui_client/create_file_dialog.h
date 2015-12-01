@@ -14,6 +14,12 @@ class CreateFileDialog : public QDialog
 public:
   explicit CreateFileDialog(QWidget *parent = 0);
   ~CreateFileDialog();
+signals:
+  void accepted(QString name, unsigned int redundancy);
+
+private slots:
+  void Accept();
+  void HandleText(const QString &text);
 
 private:
   Ui::CreateFileDialog *ui;
