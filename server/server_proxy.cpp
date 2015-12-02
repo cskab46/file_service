@@ -24,6 +24,7 @@ static FileLockMap gFileMap;
 static ordered_lock  gSlavesLock;
 static vector<pair<string, vector<string>>> gSlaves; // slaves -> files mapping
 
+void SortSlaves();
 
 bool HandleCreate(const Message &msg, Connection &con);
 bool HandleRemove(const Message &msg, Connection &con);
@@ -178,6 +179,7 @@ bool PerformOp(Connection &con, string client, string file, vector<string> slave
     tmp.GetContent(result);
     confirmed = result.ok;
   }
+
   // Slave did not confirm
   if (!confirmed) {
     cout << "Storage slaves did not confirm operation." << endl;
@@ -221,6 +223,7 @@ bool HandleCreate(const Message &msg, Connection &con) {
         }
       }
       gSlavesLock.unlock();
+      SortSlaves();
     }
 
   } catch (...) {
@@ -270,6 +273,7 @@ bool HandleRemove(const Message &msg, Connection &con) {
         }
       }
       gSlavesLock.unlock();
+      SortSlaves();
     }
   } catch (...) {
     cout << "Invalid create request from " << msg.sender() << endl;
@@ -362,6 +366,15 @@ finish:
   return succeeded;
 }
 
+void SortSlaves() {
+  gSlavesLock.lock();
+    sort(begin(gSlaves), end(gSlaves),
+         [] (const pair<string, vector<string>> &a,
+         const pair<string, vector<string>> &b) {
+      return a.second.size() < b.second.size();});
+  gSlavesLock.unlock();
+}
+
 void ManageSlaves(const bool &quit, const string &id) {
   bool err;
   auto name = kServerPrefix + to_string(stoi(id.substr(2)));
@@ -428,13 +441,9 @@ void ManageSlaves(const bool &quit, const string &id) {
         return entry.first == slave; }) == end(gSlaves);
     });
     for (auto &new_slave : new_ones)
-    gSlaves.emplace_back(new_slave, vector<string>());
-//    transform(begin(new_ones), end(new_ones), back_inserter(gSlaves), [](const string &a) {return make_pair(a, vector<string>());});
-    sort(begin(gSlaves), end(gSlaves),
-         [] (const pair<string, vector<string>> &a,
-         const pair<string, vector<string>> &b) {
-      return a.second.size() < b.second.size();});
+      gSlaves.emplace_back(new_slave, vector<string>());
     gSlavesLock.unlock();
+    SortSlaves();
 
     for (auto &file : lost_files) {
       gFileMap.DestroyFile(file);
