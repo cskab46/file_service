@@ -13,7 +13,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-qt5_wrap_ui(UI_HEADERS mainwindow.ui file_entry.ui create_file_dialog.ui)
+qt5_wrap_ui(UI_HEADERS mainwindow.ui file_entry.ui file_dialog.ui)
 qt5_add_resources(RSCS resources.qrc)
 add_custom_target(gen_qrc DEPENDS ${RSCS})
 

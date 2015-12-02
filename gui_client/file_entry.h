@@ -13,20 +13,18 @@ class FileEntry : public QWidget {
   Q_OBJECT
 
 public:
-  explicit FileEntry(QString file_name, Connection &con, QWidget *parent = 0);
+  explicit FileEntry(QString file_name, QWidget *parent = 0);
   ~FileEntry();
 signals:
-  void clicked();
+  void OpenRequested(QString file_name);
+  void DeleteRequested(QString file_name);
 protected:
   virtual void mouseDoubleClickEvent(QMouseEvent *event);
   void contextMenuEvent(QContextMenuEvent *event);
-private slots:
-  void Open();
-  void Delete();
+  void resizeEvent(QResizeEvent *event);
 private:
   Ui::FileEntry *ui;
   QString file_name_;
-  Connection &connection_;
 };
 
 #endif // FILE_ENTRY_H

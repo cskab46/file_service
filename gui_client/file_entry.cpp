@@ -5,16 +5,12 @@
 #include <QMenu>
 #include <QContextMenuEvent>
 
-FileEntry::FileEntry(QString file_name, Connection &con, QWidget *parent) :
+FileEntry::FileEntry(QString file_name, QWidget *parent) :
   QWidget(parent),
   ui(new Ui::FileEntry),
-  file_name_(file_name),
-  connection_(con) {
+  file_name_(file_name) {
   ui->setupUi(this);
-  auto fm = ui->nameLabel->fontMetrics();
-
-  ui->nameLabel->setText(fm.elidedText(file_name, Qt::ElideLeft, ui->nameLabel->width()));
-  connect(this, SIGNAL(clicked()), this, SLOT(Open()));
+  ui->nameLabel->setToolTip(file_name_);
 }
 
 FileEntry::~FileEntry() {
@@ -22,22 +18,25 @@ FileEntry::~FileEntry() {
 }
 
 void FileEntry::mouseDoubleClickEvent(QMouseEvent *event) {
-  emit clicked();
+  emit OpenRequested(file_name_);
 }
 
 void FileEntry::contextMenuEvent(QContextMenuEvent *event) {
   QMenu menu;
   menu.move(event->globalPos());
-  menu.addAction("&Open", this, SLOT(Open()));
-  menu.addAction("&Delete", this, SLOT(Delete()));
+  auto open = menu.addAction("&Open");
+  auto del = menu.addAction("&Delete");
+
+  connect(open, &QAction::triggered,
+                 [=]() { emit OpenRequested(file_name_); });
+  connect(del, &QAction::triggered,
+                 [=]() { emit DeleteRequested(file_name_); });
 
   menu.exec();
 }
 
-void FileEntry::Open() {
-
-}
-
-void FileEntry::Delete() {
-  deleteLater();
+void FileEntry::resizeEvent(QResizeEvent *event) {
+  auto fm = ui->nameLabel->fontMetrics();
+  ui->nameLabel->setText(fm.elidedText(file_name_, Qt::ElideRight,
+                                       ui->nameLabel->width()));
 }
