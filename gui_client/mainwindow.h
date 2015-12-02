@@ -10,7 +10,7 @@ namespace Ui {
 class MainWindow;
 }
 
-class FileEntry;
+class FileFrame;
 
 
 class MainWindow : public QMainWindow
@@ -45,7 +45,7 @@ private:
   Ui::MainWindow *ui;
   bool connection_error_;
   Connection connection_;
-  QMap<QString, FileEntry*> file_entries_;
+  QMap<QString, FileFrame*> file_entries_;
   QString current_file_;
 };
 

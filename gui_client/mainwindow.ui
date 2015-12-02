@@ -15,9 +15,9 @@
   </property>
   <widget class="QWidget" name="centralwidget">
    <property name="styleSheet">
-    <string notr="true">background-color: rgb(255, 255, 255);</string>
+    <string notr="true"/>
    </property>
-   <layout class="QVBoxLayout" name="verticalLayout">
+   <layout class="QHBoxLayout" name="horizontalLayout">
     <property name="spacing">
      <number>0</number>
     </property>
@@ -35,7 +35,48 @@
     </property>
     <item>
      <widget class="QStackedWidget" name="stackedWidget">
-      <widget class="QWidget" name="fileList"/>
+      <widget class="QWidget" name="firstPage">
+       <layout class="QVBoxLayout" name="verticalLayout">
+        <property name="spacing">
+         <number>0</number>
+        </property>
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>0</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="QScrollArea" name="scrollArea">
+          <property name="widgetResizable">
+           <bool>true</bool>
+          </property>
+          <widget class="QWidget" name="fileList">
+           <property name="geometry">
+            <rect>
+             <x>0</x>
+             <y>0</y>
+             <width>798</width>
+             <height>543</height>
+            </rect>
+           </property>
+           <property name="accessibleName">
+            <string/>
+           </property>
+           <property name="styleSheet">
+            <string notr="true">QWidget#fileList {background-color: rgb(255, 255, 255);}</string>
+           </property>
+          </widget>
+         </widget>
+        </item>
+       </layout>
+      </widget>
       <widget class="QWidget" name="fileEditPage">
        <layout class="QVBoxLayout" name="verticalLayout_2">
         <property name="spacing">

@@ -181,13 +181,8 @@ bool PerformOp(Connection &con, string client, string file, vector<string> slave
   // Slave did not confirm
   if (!confirmed) {
     cout << "Storage slaves did not confirm operation." << endl;
-    return false;
   }
-  if (!con.SendMessage(tmp, client)) {
-    cout << "Failed to inform client of operation result." << endl;
-  }
-
-  return true;
+  return confirmed;
 }
 
 bool HandleCreate(const Message &msg, Connection &con) {
@@ -234,17 +229,11 @@ bool HandleCreate(const Message &msg, Connection &con) {
   gFileMap.UnlockFile(op.file_name);
 
 finish:
-  if (succeeded) {
-    cout << "File '" << op.file_name << "' created." << endl;
-    Message client_confirm(kClientConfirmOp, SAFE_MESS);
-    if (!con.SendMessage(client_confirm, client)) {
-      cout << "Failed to inform client of file creation." << endl;
-    }
-  } else {
-    Message client_fail(kClientFailOp, SAFE_MESS);
-    if (!con.SendMessage(client_fail, client)) {
-      cout << "Failed to inform client of failure." << endl;
-    }
+  Message res_msg(kFileOpResult, SAFE_MESS);
+  ResultFileOp res{op.file_name, succeeded};
+  res_msg.SetContent(res);
+  if (!con.SendMessage(res_msg, client)) {
+    cout << "Failed to inform client of op result." << endl;
   }
   return succeeded;
 }
@@ -289,18 +278,11 @@ bool HandleRemove(const Message &msg, Connection &con) {
     gFileMap.UnlockFile(op.file_name);
   }
 finish:
-  if (succeeded) {
-    cout << "File '" << op.file_name << "' removed." << endl;
-    Message client_confirm(kClientConfirmOp, SAFE_MESS);
-    client_confirm.SetContent(ClientOp{op.file_name, slaves.front()});
-    if (!con.SendMessage(client_confirm, client)) {
-      cout << "Failed to inform client of file removal." << endl;
-    }
-  } else {
-    Message client_fail(kClientFailOp, SAFE_MESS);
-    if (!con.SendMessage(client_fail, client)) {
-      cout << "Failed to inform client of failure." << endl;
-    }
+  Message res_msg(kFileOpResult, SAFE_MESS);
+  ResultFileOp res{op.file_name, succeeded};
+  res_msg.SetContent(res);
+  if (!con.SendMessage(res_msg, client)) {
+    cout << "Failed to inform client of op result." << endl;
   }
   return succeeded;
 }
@@ -334,19 +316,12 @@ bool HandleRead(const Message &msg, Connection &con) {
     gFileMap.UnlockFile(op.file_name);
   }
 finish:
-//  if (succeeded) {
-//    cout << "File '" << op.file_name << "' read." << endl;
-//    Message client_confirm(kClientConfirmOp, SAFE_MESS);
-//    client_confirm.SetContent(ClientOp{op.file_name, slaves.front()});
-//    if (!con.SendMessage(client_confirm, client)) {
-//      cout << "Failed to inform client of file read." << endl;
-//    }
-//  } else {
-//    Message client_fail(kClientFailOp, SAFE_MESS);
-//    if (!con.SendMessage(client_fail, client)) {
-//      cout << "Failed to inform client of failure." << endl;
-//    }
-//  }
+  Message res_msg(kFileOpResult, SAFE_MESS);
+  ResultFileOp res{op.file_name, succeeded};
+  res_msg.SetContent(res);
+  if (!con.SendMessage(res_msg, client)) {
+    cout << "Failed to inform client of op result." << endl;
+  }
   return succeeded;
 }
 
@@ -378,18 +353,11 @@ bool HandleWrite(const Message &msg, Connection &con) {
     gFileMap.UnlockFile(op.file_name);
   }
 finish:
-  if (succeeded) {
-    cout << "File '" << op.file_name << "' written." << endl;
-    Message client_confirm(kClientConfirmOp, SAFE_MESS);
-    client_confirm.SetContent(ClientOp{op.file_name, slaves.front()});
-    if (!con.SendMessage(client_confirm, client)) {
-      cout << "Failed to inform client of file write." << endl;
-    }
-  } else {
-    Message client_fail(kClientFailOp, SAFE_MESS);
-    if (!con.SendMessage(client_fail, client)) {
-      cout << "Failed to inform client of failure." << endl;
-    }
+  Message res_msg(kFileOpResult, SAFE_MESS);
+  ResultFileOp res{op.file_name, succeeded};
+  res_msg.SetContent(res);
+  if (!con.SendMessage(res_msg, client)) {
+    cout << "Failed to inform client of op result." << endl;
   }
   return succeeded;
 }

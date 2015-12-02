@@ -1,20 +1,21 @@
-#ifndef FILE_ENTRY_H
-#define FILE_ENTRY_H
+#ifndef FILE_FRAME_H
+#define FILE_FRAME_H
 
-#include <QAbstractButton>
+#include <QFrame>
+#include <QString>
 
 namespace Ui {
-class FileEntry;
+class FileFrame;
 }
 
-class Connection;
-
-class FileEntry : public QWidget {
+class FileFrame : public QFrame
+{
   Q_OBJECT
 
 public:
-  explicit FileEntry(QString file_name, QWidget *parent = 0);
-  ~FileEntry();
+  explicit FileFrame(QString file_name, QWidget *parent = 0);
+  ~FileFrame();
+
 signals:
   void OpenRequested(QString file_name);
   void DeleteRequested(QString file_name);
@@ -23,8 +24,8 @@ protected:
   void contextMenuEvent(QContextMenuEvent *event);
   void resizeEvent(QResizeEvent *event);
 private:
-  Ui::FileEntry *ui;
+  Ui::FileFrame *ui;
   QString file_name_;
 };
 
-#endif // FILE_ENTRY_H
+#endif // FILE_FRAME_H

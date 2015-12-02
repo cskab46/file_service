@@ -1,27 +1,27 @@
-#include "file_entry.h"
-#include "ui_file_entry.h"
+#include "file_frame.h"
+#include "ui_file_frame.h"
 
 #include <QFontMetrics>
 #include <QMenu>
 #include <QContextMenuEvent>
 
-FileEntry::FileEntry(QString file_name, QWidget *parent) :
-  QWidget(parent),
-  ui(new Ui::FileEntry),
+FileFrame::FileFrame(QString file_name, QWidget *parent) :
+  QFrame(parent),
+  ui(new Ui::FileFrame),
   file_name_(file_name) {
   ui->setupUi(this);
   ui->nameLabel->setToolTip(file_name_);
 }
 
-FileEntry::~FileEntry() {
+FileFrame::~FileFrame() {
   delete ui;
 }
 
-void FileEntry::mouseDoubleClickEvent(QMouseEvent *event) {
+void FileFrame::mouseDoubleClickEvent(QMouseEvent *event) {
   emit OpenRequested(file_name_);
 }
 
-void FileEntry::contextMenuEvent(QContextMenuEvent *event) {
+void FileFrame::contextMenuEvent(QContextMenuEvent *event) {
   QMenu menu;
   menu.move(event->globalPos());
   auto open = menu.addAction("&Open");
@@ -35,7 +35,7 @@ void FileEntry::contextMenuEvent(QContextMenuEvent *event) {
   menu.exec();
 }
 
-void FileEntry::resizeEvent(QResizeEvent *event) {
+void FileFrame::resizeEvent(QResizeEvent *event) {
   auto fm = ui->nameLabel->fontMetrics();
   ui->nameLabel->setText(fm.elidedText(file_name_, Qt::ElideRight,
                                        ui->nameLabel->width()));

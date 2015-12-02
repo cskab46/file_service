@@ -86,6 +86,17 @@ bool Connection::GetMessage(int16_t type, unsigned int timeout, Message &msg) {
   return got;
 }
 
+bool Connection::GetMessage(unsigned int timeout, Message &msg) {
+  auto start = steady_clock::now();
+  while (duration_cast<milliseconds>(steady_clock::now() - start).count()
+         < timeout) {
+    if (!HasMessage()) continue;
+    msg = GetMessage();
+    return true;
+  }
+  return false;
+}
+
 bool Connection::SendMessage(const Message &msg, const string &to) {
   auto data = msg.data();
   return SP_multicast(mbox_, msg.service(), to.data(), msg.type(),

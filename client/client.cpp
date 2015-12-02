@@ -18,25 +18,26 @@ bool HandleOp(Connection &con, Message msg, ResultFileOp &result) {
     cout << "Failed sending file request to server." << endl;
     return false;
   }
-  auto start = steady_clock::now();
-  bool response = false;
-  string server;
-  ClientOp prepare;
-  while (!response &&
-         duration_cast<milliseconds>(steady_clock::now() - start).count() < kCreateTimeout) {
-    if (!con.HasMessage()) continue;
-    auto msg = con.GetMessage();
-    if (msg.type() == kClientPrepareOp) {
-      server = msg.sender();
-      msg.GetContent(prepare);
-      response = true;
-    }
-  }
-  if (!response) {
+  Message prep_msg(0,0);
+  if (!con.GetMessage(kHandleOpTimeout, prep_msg)) {
     cout << "Server did not respond to request." << endl;
     return false;
   }
-  if (!con.SendMessage(msg, prepare.slave)) {
+  if (prep_msg.type() != kClientPrepareOp) {
+    cout << "Server sent failed response." << endl;
+    return false;
+  }
+  string slave;
+  try {
+    ClientOp prepare;
+    prep_msg.GetContent(prepare);
+    slave = prepare.slave;
+  } catch (...) {
+    cout << "Failed to get server response data." << endl;
+    return false;
+  }
+
+  if (!con.SendMessage(msg, slave)) {
     cout << "Failed sending request to slave." << endl;
     return false;
   }
@@ -60,7 +61,6 @@ bool HandleOp(Connection &con, Message msg, ResultFileOp &result) {
     cout << "Failed to get result information from messages." << endl;
     return false;
   }
-
 
   if (slave_result.ok && server_result.ok) {
     result = slave_result;

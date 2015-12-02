@@ -23,6 +23,7 @@ public:
   bool HasMessage();
   const Message GetMessage();
   bool GetMessage(int16_t type, unsigned int timeout, Message &msg);
+  bool GetMessage(unsigned int timeout, Message &msg);
   bool SendMessage(const Message &msg, const string &to);
 
 private:

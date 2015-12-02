@@ -18,11 +18,12 @@ bool HandleOp(Connection &con, Message msg, ResultFileOp &result) {
     return false;
   }
   Message prep_msg(0,0);
-  if (!con.GetMessage(kClientPrepareOp, kHandleOpTimeout, prep_msg)) {
-    //cout << "Server did not respond to request." << endl;
+  if (!con.GetMessage(kHandleOpTimeout, prep_msg)) {
     return false;
   }
-
+  if (prep_msg.type() != kClientPrepareOp) {
+    return false;
+  }
   string slave;
   try {
     ClientOp prepare;

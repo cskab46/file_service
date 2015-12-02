@@ -7,7 +7,7 @@
 #include <QTimer>
 
 #include "flowlayout.h"
-#include "file_entry.h"
+#include "file_frame.h"
 #include "file_dialog.h"
 #include "client.h"
 
@@ -75,6 +75,7 @@ void MainWindow::contextMenuEvent(QContextMenuEvent *event) {
         file_entries_.remove(f);
       }
     }
+    SetStatusMessage("Files synced.");
   });
   menu.exec();
 }
@@ -145,7 +146,7 @@ void MainWindow::CreateFile(QString file_name, unsigned int redundancy) {
     SetStatusMessage("Failed to create file.");
     return;
   }
-  auto fe = new FileEntry(file_name);
+  auto fe = new FileFrame(file_name);
   file_entries_[file_name] = fe;
   this->connect(fe, SIGNAL(OpenRequested(QString)), this , SLOT(Open(QString)));
   this->connect(fe, SIGNAL(DeleteRequested(QString)), this , SLOT(RemoveFile(QString)));
@@ -165,7 +166,7 @@ void MainWindow::LoadFile(QString file_name) {
     SetStatusMessage("Failed to load file.");
     return;
   }
-  auto fe = new FileEntry(file_name);
+  auto fe = new FileFrame(file_name);
   file_entries_[file_name] = fe;
   this->connect(fe, SIGNAL(OpenRequested(QString)), this , SLOT(Open(QString)));
   this->connect(fe, SIGNAL(DeleteRequested(QString)), this , SLOT(RemoveFile(QString)));
